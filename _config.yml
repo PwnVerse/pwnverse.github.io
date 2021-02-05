@@ -130,11 +130,10 @@ night_mode: "auto"
 #   - about.md
 
 # Page default value
-# defaults:
-#   home:
-#     heading: "Your awesome heading"
-#     subheading: "Your awesome subheading"
-#     banner: "Your image url"
+defaults:
+   home:
+     heading: "Cyb0rG's Home"
+     subheading: "Life is what happens when you're busy shaping the heap"
 
 # Pagination setting
 # paginate: 5
