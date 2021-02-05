@@ -25,11 +25,7 @@ Without an object based allocator , the kernel will spend more time in allocatio
 
 The slab allocator consists of a variable number of caches that are linked together on a circular doubly linked list called **cache chain**. Each cache maintains blocks of contiguous pages in memory called **slabs**.
 
-<figure>
-	<a href="./imgs/Slab.png"><img src="./imgs/Slab.png"></a>
-	<figcaption>An overview of slab.</figcaption>
-</figure>
-
+![Slab Overview](./imgs/Slab.png)
 
 ## Principles of Slab allocator
 
@@ -250,47 +246,34 @@ Each CPU has tid initialised to the CPU number and is incremented by the **CONFI
 
 The **barrier** simply ensures that read occurs in order.
 + The first free object is read into the **object** variable and if the page has no objects left , a call to slab alloc is done to do an entire new allocation from here.
-<p>&nbsp;</p>
 
 + If we have free objects , a call to **get\_freepointer\_safe()** is made to get the free object.
-<p>&nbsp;</p>
 
 + Following this , a call to **cmpxchg** is made which is to check if the freelist pointer and the tid have not been changed , and if not , they are respectively updated with their new values of **next\_object** and **next\_tid**.
-<p>&nbsp;</p>
 
 + The **cmpxchg** happens atomically and hence there is no need of locking here.
-<p>&nbsp;</p>
 
 + Moving on , we have a call to **prefetch\_freepointer** which just adds our object with the offset and basically sets up the next free chunk in the list to the cache line.
-<p>&nbsp;</p>
-
 + Finally , **slab\_post\_alloc\_hook** is called which returns the modified slab to the memory control group.
-<p>&nbsp;</p>
 
 
 In short , the entire process of allocating memory using slab allocator is - 
 
 + Suppose kernel is asked for a size of x.
-<p>&nbsp;</p>
 
 + Slab allocator looks in the slab index for the slab that holds object of size x.
-<p>&nbsp;</p>
 
 + The slab allocator gets a pointer to slab where objects are stored.
-<p>&nbsp;</p>
 
 + Finds the first empty slot
-<p>&nbsp;</p>
 
 + Similar process is used for freeing the allocated slab.
-<p>&nbsp;</p>
 
 
 So why'd we move from slab allocator , and now linux uses the SLUB allocator? 
 
 You see , slab had its own scalability problems. Slab object queues exist per node per CPU. For very large systems, such queues may grow exponentially and hence at some point of processing , may consume the entire system memory which is not what we need.
 
-<p>&nbsp;</p>
 
 Hence , the need of a more scalable allocator was the need of the hour.
 
@@ -306,13 +289,10 @@ short unsigned int offset;
 ```
 
 + Freelist is the pointer to the first free chunk in the slab.
-<p>&nbsp;</p>
 
 + inuse is the count of number of objects being used.
-<p>&nbsp;</p>
 
 + offset is offset to the next free chunk.
-<p>&nbsp;</p>
 
 
 SLUB also introduces the coalescing of slabs which greatly reduces the memory overhead.
