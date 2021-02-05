@@ -1,0 +1,202 @@
+I"7<h1 id="tldr">tl;dr</h1>
+
+<ul>
+  <li>Leak <code class="language-plaintext highlighter-rouge">libc</code> and <code class="language-plaintext highlighter-rouge">heap</code> addresses , use the edit option to get allocation at tcache structure.</li>
+  <li>Create fake tcache entry for <code class="language-plaintext highlighter-rouge">stdout</code> file structure , get allocation at <code class="language-plaintext highlighter-rouge">stdout</code> to leak <code class="language-plaintext highlighter-rouge">stack</code> from <code class="language-plaintext highlighter-rouge">environ</code>.</li>
+  <li>Free and allocate tcache structure to re-edit , this time get allocation at <code class="language-plaintext highlighter-rouge">return address</code> on stack , finally execute mprotect rop chain and <code class="language-plaintext highlighter-rouge">orw</code> shellcode.</li>
+</ul>
+
+<p><strong>Challenge Points:</strong> 1000
+<strong>Solves:</strong> 5</p>
+
+<p>HackTheBox had really interesting heap challenges and this is one of the challenges we solved during the CTF.</p>
+
+<h2 id="initial-analysis">Initial analysis</h2>
+
+<p>We had been provided with the binary as well as the source code for a standard CTF-style menu driven program. The libc provided inside the docker was <code class="language-plaintext highlighter-rouge">2.32</code>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CANARY    : ENABLED
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+</code></pre></div></div>
+
+<h2 id="reversing">Reversing</h2>
+
+<p>Since source code was provided , it was pretty self explanatory. The program implements <code class="language-plaintext highlighter-rouge">seccomp rules</code> and the following system calls have been allowed.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	Allow<span class="o">(</span>brk<span class="o">)</span>,
+	Allow<span class="o">(</span>mmap<span class="o">)</span>,
+	Allow<span class="o">(</span>exit_group<span class="o">)</span>,
+	Allow<span class="o">(</span>mmap<span class="o">)</span>,
+	Allow<span class="o">(</span>munmap<span class="o">)</span>,
+	Allow<span class="o">(</span><span class="nb">read</span><span class="o">)</span>,
+	Allow<span class="o">(</span>write<span class="o">)</span>,
+	Allow<span class="o">(</span>getdents<span class="o">)</span>,
+	Allow<span class="o">(</span>mprotect<span class="o">)</span>,
+	Allow<span class="o">(</span>open<span class="o">)</span>,
+	Allow<span class="o">(</span>sendfile<span class="o">)</span>,
+</code></pre></div></div>
+
+<p>The program implements the structure of a custom chunk provided by malloc.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">typedef</span> <span class="k">struct</span> <span class="n">_chunk</span> <span class="p">{</span>
+	<span class="kt">uint32_t</span> <span class="n">size</span><span class="p">;</span>
+	<span class="kt">void</span> <span class="o">*</span> <span class="n">ptr</span><span class="p">;</span>
+	<span class="n">bool</span> <span class="n">in_use</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">chunk</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>It has <code class="language-plaintext highlighter-rouge">size</code>, a void* <code class="language-plaintext highlighter-rouge">ptr</code> and a flag <code class="language-plaintext highlighter-rouge">in_use</code>.</p>
+
+<p><code class="language-plaintext highlighter-rouge">Alloc</code> :</p>
+
+<ul>
+  <li>The maximum size of an allocated chunk should not exceed <code class="language-plaintext highlighter-rouge">0x400</code>.</li>
+  <li>After allocation, chunk’s first field <code class="language-plaintext highlighter-rouge">ptr</code> is set to NULL , data is read into the memory.</li>
+  <li>Subsequently , the <code class="language-plaintext highlighter-rouge">in_use</code> flag is set to true and size is set.</li>
+</ul>
+
+<p><code class="language-plaintext highlighter-rouge">Delete</code> :</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">idx</code> should be less than or equal to <code class="language-plaintext highlighter-rouge">0x10</code>.</li>
+  <li>This option prints data and then frees the memory without nulling out the pointer.</li>
+  <li>Finally , it sets the <code class="language-plaintext highlighter-rouge">in_use</code> flag to false.</li>
+</ul>
+
+<p><code class="language-plaintext highlighter-rouge">Edit</code> :</p>
+
+<ul>
+  <li>Lets us edit a byte of a chunk at an index only once.</li>
+</ul>
+
+<h2 id="bug">Bug</h2>
+
+<p>The <code class="language-plaintext highlighter-rouge">Delete</code> option has a simple Use after free.</p>
+
+<h2 id="getting-heap-and-libc-leak">Getting heap and libc leak</h2>
+
+<p>We can only view a chunk we are about to free. To get libc leak , we can simply fill a tcache bin corresponding to small bin size. Then, after we have a chunk in the unsorted bin  ,we can add a small chunk , which will be allocated from the unsorted bin , free it to get libc.</p>
+
+<p>For heap , its actually a little more complicated than we expected. Since libc is 2.32 , the <code class="language-plaintext highlighter-rouge">fd</code> pointer of a tcache chunk will be encoded with this algorithm.</p>
+
+<p class="image-pull-right"><img src="https://lh5.googleusercontent.com/proxy/6WVq2hd0LuqnQLN0K6xkaYaZ1DtYaQPW9I-svrS95apQQI_sw16cnQ6iNaKfYRN_cZr1kV947ps16uBDo6VB0GhjzytXx3yJgPg7zE93jBZ8Tp3xQfhdYEgXJn3-s4vH=w1200-h630-p-k-no-nu" alt="" /></p>
+
+<p>We can’t use tcache bins to leak heap as in tcache , the first 8 bytes will be encoded , and the next 8 bytes which stores the address of <code class="language-plaintext highlighter-rouge">tcache structure</code>. Moreover , the malloc algorithm clears the address of <code class="language-plaintext highlighter-rouge">tcache structure</code> and hence , we can’t leak heap.So , our only option is to use unsorted bins as malloc does not clear addresses of unsorted bin. If we send two chunks into unsorted bin , the fd and bk pointers will be libc and heap. So , there’s a chance we can leak libc here.</p>
+
+<p>When we allocate memory from unsorted bin , for some reason , it replaces the heap pointer with a libc pointer thus taking us further away from leaking heap.</p>
+
+<p>During the CTF , we were stuck here for sometime. Soon enough , we realized that if we can merge <strong>two unsorted bin</strong> chunks , the fd and bk of the chunk being merged are not cleared. Hence , in the next allocation ,we can actually overlap with our heap leak.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0x561195df27b0:	0x0000000000000000	0x0000000000000141 -&gt; consolidated unsorted bin <span class="o">(</span> 0xa0 + 0xa0 <span class="o">)</span>
+0x561195df27c0:	0x0000561195df26f0	0x00007f0be6ddec00
+0x561195df27d0:	0x0000000000000000	0x0000000000000000
+0x561195df27e0:	0x0000000000000000	0x0000000000000000
+0x561195df27f0:	0x0000000000000000	0x0000000000000000
+0x561195df2800:	0x0000000000000000	0x0000000000000000
+0x561195df2810:	0x0000000000000000	0x0000000000000000
+0x561195df2820:	0x0000000000000000	0x0000000000000000
+0x561195df2830:	0x0000000000000000	0x0000000000000000
+0x561195df2840:	0x0000000000000000	0x0000000000000000
+0x561195df2850:	0x0000000000000000	0x00000000000000a1 -&gt; Overlapping chunk that is merged with the above chunk
+0x561195df2860:	0x0000561195df26f0	0x00007f0be6ddec00 -&gt; fd <span class="o">(</span>heap<span class="o">)</span> and bk are not cleared
+0x561195df2870:	0x0000000000000000	0x0000000000000000
+0x561195df2880:	0x0000000000000000	0x0000000000000000
+0x561195df2890:	0x0000000000000000	0x0000000000000000
+0x561195df28a0:	0x0000000000000000	0x0000000000000000
+0x561195df28b0:	0x0000000000000000	0x0000000000000000
+0x561195df28c0:	0x0000000000000000	0x0000000000000000
+0x561195df28d0:	0x0000000000000000	0x0000000000000000
+0x561195df28e0:	0x0000000000000000	0x0000000000000000
+0x561195df28f0:	0x0000000000000140	0x0000000000000020
+</code></pre></div></div>
+
+<p>Now , we can fill memory until the heap address , and then free it to leak heap.</p>
+
+<h2 id="allocation-at-stack">Allocation at stack</h2>
+
+<p>We have libc and heap leaks ,now what? The next step is to use our vulnerable edit function to edit a byte of forward pointer. We could choose to target malloc or free hook , but remember , there’s seccomp enabled and I honestly was too lazy to find gadgets for following a jump oriented programming approach with complex rop.</p>
+
+<p>So again , we were stuck at this point. One idea which we were pondering upon was to get allocation at stdout <code class="language-plaintext highlighter-rouge">vtables</code> [vtables are writeable in libc 2.32 surprisingly]. We could get code execution multiple times , but we could not chain any stack pivoting gadgets since registers were being corrupted before getting code execution multiple times. Hence,  we had to drop this idea as well.</p>
+
+<p>Finally , we planned to get allocation at tcache structure. We can do something like this.</p>
+
+<ul>
+  <li>Edit the last byte of a free chunk to point to a fake chunk whose <code class="language-plaintext highlighter-rouge">fd</code> pointer is encoded with the address of tcache structure.</li>
+</ul>
+
+<p>This way , we had leveraged arbitrary write using a single byte edit. But , we needed more than one arbitrary writes , the answer to which was the tcache structure.</p>
+
+<p>We could free the tcache structure and reallocate it to edit it as many times as we want.</p>
+
+<p>Our idea was to get allocation the return address of the <code class="language-plaintext highlighter-rouge">alloc</code> function so that we can rop and mprotect heap to get shellcode execution. For that , what we can do is -</p>
+
+<ul>
+  <li>Edit tcache count and the corresponding tcache entry to that count with the address of <code class="language-plaintext highlighter-rouge">stdout</code> file structure.</li>
+  <li>Get allocation at <code class="language-plaintext highlighter-rouge">stdout</code> , the plan is to leak stack from <code class="language-plaintext highlighter-rouge">environ</code>.</li>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">stdout-&gt;flags</code> with <code class="language-plaintext highlighter-rouge">0xfbad3887</code></li>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">IO_read_ptr</code> , <code class="language-plaintext highlighter-rouge">IO_read_end</code> and <code class="language-plaintext highlighter-rouge">_IO_read_base</code> with NULL.</li>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">IO_write_base</code> with address of <code class="language-plaintext highlighter-rouge">environ</code>.</li>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">IO_write_end</code> with address of <code class="language-plaintext highlighter-rouge">environ+0x10</code>.</li>
+</ul>
+
+<p>Detailed information about arbitrary memory read from file structures <a href="https://gsec.hitb.org/materials/sg2018/D1%20-%20FILE%20Structures%20-%20Another%20Binary%20Exploitation%20Technique%20-%20An-Jie%20Yang.pdf">here</a></p>
+
+<p>Awesome , we have stack leak , now , re-edit tcache structure to get allocation at return address. Make sure the stack address should be 16-byte aligned else malloc will abort due to alignment issues.</p>
+
+<h2 id="shellcode-and-flag">Shellcode and flag</h2>
+
+<p>All set and done , we get allocation at return address. From here , it’s a fairly simple problem to mprotect <code class="language-plaintext highlighter-rouge">heap</code> and give an <code class="language-plaintext highlighter-rouge">orw</code> shellcode. But wait , there is one problem.</p>
+
+<p>Looking at the <code class="language-plaintext highlighter-rouge">Dockerfile</code> we saw , this line</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CMD <span class="nb">mv</span> /home/ctf/flag.txt /home/ctf/[REDACTED]_flag.txt
+</code></pre></div></div>
+
+<p>So , the flag file name is unknown now. Looking at seccomp filters , we see that , we have <code class="language-plaintext highlighter-rouge">getdents</code> syscall allowed which is exactly what we need now.</p>
+
+<p>Getdents allows us to list all files in a directory. We will choose <code class="language-plaintext highlighter-rouge">.</code> directory and get all file names.</p>
+
+<p>The shellcode for getdents is</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+        /<span class="k">*</span> open<span class="o">(</span><span class="s1">'.'</span><span class="o">)</span> <span class="k">*</span>/
+        mov rdi, 0x2e
+        push 0
+        push rdi
+        push rsp
+        pop rdi
+        mov rax, 2
+        xor rsi, rsi
+        cdq
+        syscall
+
+        /<span class="k">*</span> getdents <span class="k">*</span>/
+        mov rdi, rax
+        mov rax, 0x4e
+        lea rsi, <span class="o">[</span>rbp-0x70]
+        cdq
+        mov dh, 0x10
+        syscall
+
+        /<span class="k">*</span> write <span class="k">*</span>/
+        mov rdi, 1
+        lea rsi, <span class="o">[</span>rbp-0x70]
+        mov rdx, rax
+        mov rax, 1
+        syscall
+</code></pre></div></div>
+
+<p>Once , we get the flag file name , we can do a simple <code class="language-plaintext highlighter-rouge">orw</code> shellcode.</p>
+
+<p>PS : In the end , we found out that flag file name is <code class="language-plaintext highlighter-rouge">/home/ctf/flag.txt</code> itself , which was pretty frustrating :/</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>There could have been many possibilities to mprotect and execute shellcode , we choose the good old stack to get it done. All in all , it was a really good challenge.</p>
+
+<p><a href="https://gist.github.com/PwnVerse/2f1fea428f3850d72d2ac9ac3d9c2c78">Here</a> is the exploit script.</p>
+
+:ET

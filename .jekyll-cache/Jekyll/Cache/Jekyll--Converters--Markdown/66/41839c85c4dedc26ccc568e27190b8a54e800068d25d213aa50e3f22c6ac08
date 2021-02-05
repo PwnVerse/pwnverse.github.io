@@ -1,0 +1,315 @@
+I"6c<h2 id="tldr">tl;dr</h2>
+
+<ul>
+  <li>Get an insight into the workings of the different alloctors implemented in the linux kernel.</li>
+  <li>Venture a little into the source code.</li>
+</ul>
+
+<h2 id="the-slob-allocator">The Slob Allocator</h2>
+
+<p>Simple List of Blocks allocator is one of the three main allocators in the linux kernel. It is mostly used in embedded systems where memory is expensive. It works using the <strong>first fit</strong> algorithm and hence leads to fragmentation.</p>
+
+<h2 id="the-slab-allocator">The Slab Allocator</h2>
+
+<p>It fixes the shortcomings of the slob allocator</p>
+
+<p>The basic idea behind the slab allocator is to have caches of commonly used objects kept in an initialized state ready for use by the kernel. So why this object based allocation one may ask?</p>
+
+<p class="notice">Without an object based allocator , the kernel will spend more time in allocation , initializing and freeing the same object.</p>
+
+<p>The slab allocator consists of a variable number of caches that are linked together on a circular doubly linked list called <strong>cache chain</strong>. Each cache maintains blocks of contiguous pages in memory called <strong>slabs</strong>.</p>
+
+<p><img src="slab.png" alt="Slab" /></p>
+
+<h2 id="principles-of-slab-allocator">Principles of Slab allocator</h2>
+
+<ul>
+  <li>The allocation of small blocks of memory to help eliminate internal fragmentation.</li>
+  <li>Caching of commonly used objects so that the kernel doesnt waste time.</li>
+  <li>Better utilization of hardware cache by aligning objects to the L1 or L2 caches.</li>
+</ul>
+
+<p>In a general sense , the slab allocator in sits on top of a bump allocator called <strong>buddy allocator</strong> and makes sure that commonly used objects are cached.</p>
+
+<p>The slab allocator provides Dedicated and generic cache classes. The separation between cache classes can be seen in a proc file called <strong>/proc/slabinfo</strong>.</p>
+
+<h3 id="interfaces-of-kernel-memory-allocation">Interfaces of kernel memory allocation</h3>
+
+<p><strong>kmalloc</strong> is the general interface the kernel provides to do generic allocations through slab allocator. There are also others like <strong>kzalloc</strong> (similar to glibc calloc) and krealloc.</p>
+
+<h2 id="how-does-a-heap-chunk-look-like-in-the-kernel">How does a heap chunk look like in the kernel?</h2>
+
+<p>With the slab allocator , kmalloc’d chunks <strong>dont have any metadata</strong> like headers for size in glibc. The free chunks obviously are stored in a single linked list.</p>
+
+<ul>
+  <li>A slab allocator interface like kmalloc searches the right <strong>kmem_cache structure</strong> that serves a given size of allocation.</li>
+</ul>
+
+<h2 id="a-little-exploration-of-the-source-code">A little exploration of the source code</h2>
+
+<p>For sizes less than or equal to <strong>192</strong>, kmalloc maintains immediate caches of sizes of range 8 to 192.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">__always_inline</span> <span class="kt">void</span> <span class="o">*</span><span class="nf">__do_kmalloc</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">gfp_t</span> <span class="n">flags</span><span class="p">,</span>
+					  <span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">caller</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="n">cachep</span><span class="p">;</span>
+	<span class="kt">void</span> <span class="o">*</span><span class="n">ret</span><span class="p">;</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">unlikely</span><span class="p">(</span><span class="n">size</span> <span class="o">&gt;</span> <span class="n">KMALLOC_MAX_CACHE_SIZE</span><span class="p">))</span>
+		<span class="k">return</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="n">cachep</span> <span class="o">=</span> <span class="n">kmalloc_slab</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">flags</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">unlikely</span><span class="p">(</span><span class="n">ZERO_OR_NULL_PTR</span><span class="p">(</span><span class="n">cachep</span><span class="p">)))</span>
+		<span class="k">return</span> <span class="n">cachep</span><span class="p">;</span>
+	<span class="n">ret</span> <span class="o">=</span> <span class="n">slab_alloc</span><span class="p">(</span><span class="n">cachep</span><span class="p">,</span> <span class="n">flags</span><span class="p">,</span> <span class="n">caller</span><span class="p">);</span>
+
+	<span class="n">ret</span> <span class="o">=</span> <span class="n">kasan_kmalloc</span><span class="p">(</span><span class="n">cachep</span><span class="p">,</span> <span class="n">ret</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">flags</span><span class="p">);</span>
+	<span class="n">trace_kmalloc</span><span class="p">(</span><span class="n">caller</span><span class="p">,</span> <span class="n">ret</span><span class="p">,</span>
+		      <span class="n">size</span><span class="p">,</span> <span class="n">cachep</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">,</span> <span class="n">flags</span><span class="p">);</span>
+
+	<span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The call to kmalloc_slab is demonstrated.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="nf">kmalloc_slab</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">gfp_t</span> <span class="n">flags</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">index</span><span class="p">;</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">size</span> <span class="o">&lt;=</span> <span class="mi">192</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">size</span><span class="p">)</span>
+			<span class="k">return</span> <span class="n">ZERO_SIZE_PTR</span><span class="p">;</span>
+
+		<span class="n">index</span> <span class="o">=</span> <span class="n">size_index</span><span class="p">[</span><span class="n">size_index_elem</span><span class="p">(</span><span class="n">size</span><span class="p">)];</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">WARN_ON_ONCE</span><span class="p">(</span><span class="n">size</span> <span class="o">&gt;</span> <span class="n">KMALLOC_MAX_CACHE_SIZE</span><span class="p">))</span>
+			<span class="k">return</span> <span class="nb">NULL</span><span class="p">;</span>
+		<span class="n">index</span> <span class="o">=</span> <span class="n">fls</span><span class="p">(</span><span class="n">size</span> <span class="o">-</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="n">kmalloc_caches</span><span class="p">[</span><span class="n">kmalloc_type</span><span class="p">(</span><span class="n">flags</span><span class="p">)][</span><span class="n">index</span><span class="p">];</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<ul>
+  <li>If requested size is greater than <strong>KMALLOC_MAX_CACHE_SIZE</strong> which is the size of two pages <strong>8192</strong> , then a call to <strong>kmalloc_large</strong> is made.</li>
+  <li>The call to <strong>kmalloc_slab</strong> gets a cache pool using size based indexing.</li>
+</ul>
+
+<p>The <strong>slub_alloc</strong> calls another function <strong>slab_alloc_node</strong>.</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">__always_inline</span> <span class="kt">void</span> <span class="o">*</span><span class="nf">slab_alloc</span><span class="p">(</span><span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="n">s</span><span class="p">,</span>
+		<span class="n">gfp_t</span> <span class="n">gfpflags</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">addr</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="n">slab_alloc_node</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">gfpflags</span><span class="p">,</span> <span class="n">NUMA_NO_NODE</span><span class="p">,</span> <span class="n">addr</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>Here, the variable <strong>NUMA_NO_NODE</strong> that is <strong>Non uniform memory access</strong> cells.</p>
+
+<p class="notice">From a hardware aspect, a NUMA system can be assumed to be cells of memory each of which is in itself a symmetric memory processor subset of the system. They provide a scalable memory bandwidth.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">__always_inline</span> <span class="kt">void</span> <span class="o">*</span><span class="nf">slab_alloc_node</span><span class="p">(</span><span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="n">s</span><span class="p">,</span>
+		<span class="n">gfp_t</span> <span class="n">gfpflags</span><span class="p">,</span> <span class="kt">int</span> <span class="n">node</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">addr</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="kt">void</span> <span class="o">*</span><span class="n">object</span><span class="p">;</span>
+	<span class="k">struct</span> <span class="n">kmem_cache_cpu</span> <span class="o">*</span><span class="n">c</span><span class="p">;</span>
+	<span class="k">struct</span> <span class="n">page</span> <span class="o">*</span><span class="n">page</span><span class="p">;</span>
+	<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">tid</span><span class="p">;</span>
+	<span class="k">struct</span> <span class="n">obj_cgroup</span> <span class="o">*</span><span class="n">objcg</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+
+	<span class="n">s</span> <span class="o">=</span> <span class="n">slab_pre_alloc_hook</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">objcg</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">gfpflags</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">s</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">NULL</span><span class="p">;</span>
+    <span class="p">...</span>
+    <span class="p">...</span>
+</code></pre></div></div>
+
+<p>Let us dive into the <strong>slab_pre_alloc_hook</strong>.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kr">inline</span> <span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="nf">slab_pre_alloc_hook</span><span class="p">(</span><span class="k">struct</span> <span class="n">kmem_cache</span> <span class="o">*</span><span class="n">s</span><span class="p">,</span>
+						     <span class="n">gfp_t</span> <span class="n">flags</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="n">flags</span> <span class="o">&amp;=</span> <span class="n">gfp_allowed_mask</span><span class="p">;</span>
+	<span class="n">lockdep_trace_alloc</span><span class="p">(</span><span class="n">flags</span><span class="p">);</span>
+	<span class="n">might_sleep_if</span><span class="p">(</span><span class="n">gfpflags_allow_blocking</span><span class="p">(</span><span class="n">flags</span><span class="p">));</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">should_failslab</span><span class="p">(</span><span class="n">s</span><span class="o">-&gt;</span><span class="n">object_size</span><span class="p">,</span> <span class="n">flags</span><span class="p">,</span> <span class="n">s</span><span class="o">-&gt;</span><span class="n">flags</span><span class="p">))</span>
+		<span class="k">return</span> <span class="nb">NULL</span><span class="p">;</span>
+
+	<span class="k">return</span> <span class="n">memcg_kmem_get_cache</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">flags</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Masking of bits is done to ensure that the relevant operation is dont. The more interesting part is the <strong>might_sleep_if</strong> function which actually returns a boolean value to decide whether the given flag can cause a sleep or not.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kr">inline</span> <span class="n">bool</span> <span class="nf">gfpflags_allow_blocking</span><span class="p">(</span><span class="k">const</span> <span class="n">gfp_t</span> <span class="n">gfp_flags</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="n">bool</span> <span class="n">__force</span><span class="p">)(</span><span class="n">gfp_flags</span> <span class="o">&amp;</span> <span class="n">__GFP_DIRECT_RECLAIM</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The <strong>GFP_KERNEL</strong> flag is actually flag obtained by or’ing 3 lower level flags.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#define __GFP_DIRECT_RECLAIM	((__force gfp_t)___GFP_DIRECT_RECLAIM) </span><span class="cm">/* Caller can reclaim */</span><span class="cp">
+#define __GFP_RECLAIM ((__force gfp_t)(___GFP_DIRECT_RECLAIM|___GFP_KSWAPD_RECLAIM))
+#define GFP_KERNEL	(__GFP_RECLAIM | __GFP_IO | __GFP_FS)
+</span></code></pre></div></div>
+
+<p>This means, our <strong>gfpflags_allow_blocking</strong> will return a true with <strong>GFP_KERNEL</strong>. This makes sense as getting a free slab may require time and if we sleep , we can give our processor to switch to another task in the meanwhile.</p>
+
+<p>Ok so back to <strong>slab_alloc_node</strong>, the next section is -</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nl">redo:</span>
+	<span class="cm">/*
+	 * Must read kmem_cache cpu data via this cpu ptr. Preemption is
+	 * enabled. We may switch back and forth between cpus while
+	 * reading from one cpu area. That does not matter as long
+	 * as we end up on the original cpu again when doing the cmpxchg.
+	 *
+	 * We should guarantee that tid and kmem_cache are retrieved on
+	 * the same cpu. It could be different if CONFIG_PREEMPT so we need
+	 * to check if it is matched or not.
+	 */</span>
+	<span class="k">do</span> <span class="p">{</span>
+		<span class="n">tid</span> <span class="o">=</span> <span class="n">this_cpu_read</span><span class="p">(</span><span class="n">s</span><span class="o">-&gt;</span><span class="n">cpu_slab</span><span class="o">-&gt;</span><span class="n">tid</span><span class="p">);</span>
+		<span class="n">c</span> <span class="o">=</span> <span class="n">raw_cpu_ptr</span><span class="p">(</span><span class="n">s</span><span class="o">-&gt;</span><span class="n">cpu_slab</span><span class="p">);</span>
+	<span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">IS_ENABLED</span><span class="p">(</span><span class="n">CONFIG_PREEMPT</span><span class="p">)</span> <span class="o">&amp;&amp;</span>
+		 <span class="n">unlikely</span><span class="p">(</span><span class="n">tid</span> <span class="o">!=</span> <span class="n">READ_ONCE</span><span class="p">(</span><span class="n">c</span><span class="o">-&gt;</span><span class="n">tid</span><span class="p">)));</span>
+
+</code></pre></div></div>
+
+<p><strong>tid</strong> is a unique cpu transaction id.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#define TID_STEP  roundup_pow_of_two(CONFIG_NR_CPUS)
+</span>
+</code></pre></div></div>
+
+<p>Each CPU has tid initialised to the CPU number and is incremented by the <strong>CONFIG_NR_CPUS</strong> and thus are kept unique.</p>
+
+<ul>
+  <li>The next while loop is simply for checking if another thread of CPU is trying to call <strong>slab_alloc_node</strong> and if so , its tid will be different and hence the tid is re-read.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	<span class="n">barrier</span><span class="p">();</span>
+
+	<span class="cm">/*
+	 * The transaction ids are globally unique per cpu and per operation on
+	 * a per cpu queue. Thus they can be guarantee that the cmpxchg_double
+	 * occurs on the right processor and that there was no operation on the
+	 * linked list in between.
+	 */</span>
+
+	<span class="n">object</span> <span class="o">=</span> <span class="n">c</span><span class="o">-&gt;</span><span class="n">freelist</span><span class="p">;</span>
+	<span class="n">page</span> <span class="o">=</span> <span class="n">c</span><span class="o">-&gt;</span><span class="n">page</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">unlikely</span><span class="p">(</span><span class="o">!</span><span class="n">object</span> <span class="o">||</span> <span class="o">!</span><span class="n">page</span> <span class="o">||</span> <span class="o">!</span><span class="n">node_match</span><span class="p">(</span><span class="n">page</span><span class="p">,</span> <span class="n">node</span><span class="p">)))</span> <span class="p">{</span>
+		<span class="n">object</span> <span class="o">=</span> <span class="n">__slab_alloc</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">gfpflags</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">addr</span><span class="p">,</span> <span class="n">c</span><span class="p">);</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="kt">void</span> <span class="o">*</span><span class="n">next_object</span> <span class="o">=</span> <span class="n">get_freepointer_safe</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">object</span><span class="p">);</span>
+
+		<span class="cm">/*
+		 * The cmpxchg will only match if there was no additional
+		 * operation and if we are on the right processor.
+		 *
+		 * The cmpxchg does the following atomically (without lock
+		 * semantics!)
+		 * 1. Relocate first pointer to the current per cpu area.
+		 * 2. Verify that tid and freelist have not been changed
+		 * 3. If they were not changed replace tid and freelist
+		 *
+		 * Since this is without lock semantics the protection is only
+		 * against code executing on this cpu *not* from access by
+		 * other cpus.
+		 */</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">unlikely</span><span class="p">(</span><span class="o">!</span><span class="n">this_cpu_cmpxchg_double</span><span class="p">(</span>
+				<span class="n">s</span><span class="o">-&gt;</span><span class="n">cpu_slab</span><span class="o">-&gt;</span><span class="n">freelist</span><span class="p">,</span> <span class="n">s</span><span class="o">-&gt;</span><span class="n">cpu_slab</span><span class="o">-&gt;</span><span class="n">tid</span><span class="p">,</span>
+				<span class="n">object</span><span class="p">,</span> <span class="n">tid</span><span class="p">,</span>
+				<span class="n">next_object</span><span class="p">,</span> <span class="n">next_tid</span><span class="p">(</span><span class="n">tid</span><span class="p">))))</span> <span class="p">{</span>
+
+			<span class="n">note_cmpxchg_failure</span><span class="p">(</span><span class="s">"slab_alloc"</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">tid</span><span class="p">);</span>
+			<span class="k">goto</span> <span class="n">redo</span><span class="p">;</span>
+		<span class="p">}</span>
+		<span class="n">prefetch_freepointer</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">next_object</span><span class="p">);</span>
+		<span class="n">stat</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">ALLOC_FASTPATH</span><span class="p">);</span>
+	<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The <strong>barrier</strong> simply ensures that read occurs in order.</p>
+<ul>
+  <li>
+    <p>The first free object is read into the <strong>object</strong> variable and if the page has no objects left , a call to slab alloc is done to do an entire new allocation from here.</p>
+  </li>
+  <li>
+    <p>If we have free objects , a call to <strong>get_freepointer_safe()</strong> is made to get the free object.</p>
+  </li>
+  <li>
+    <p>Following this , a call to <strong>cmpxchg</strong> is made which is to check if the freelist pointer and the tid have not been changed , and if not , they are respectively updated with their new values of <strong>next_object</strong> and <strong>next_tid</strong>.</p>
+  </li>
+  <li>
+    <p>The <strong>cmpxchg</strong> happens atomically and hence there is no need of locking here.</p>
+  </li>
+  <li>Moving on , we have a call to <strong>prefetch_freepointer</strong> which just adds our object with the offset and basically sets up the next free chunk in the list to the cache line.</li>
+  <li>Finally , <strong>slab_post_alloc_hook</strong> is called which returns the modified slab to the memory control group.</li>
+</ul>
+
+<p>In short , the entire process of allocating memory using slab allocator is -</p>
+
+<ul>
+  <li>
+    <p>Suppose kernel is asked for a size of x.</p>
+  </li>
+  <li>
+    <p>Slab allocator looks in the slab index for the slab that holds object of size x.</p>
+  </li>
+  <li>
+    <p>The slab allocator gets a pointer to slab where objects are stored.</p>
+  </li>
+  <li>
+    <p>Finds the first empty slot</p>
+  </li>
+  <li>
+    <p>Similar process is used for freeing the allocated slab.</p>
+  </li>
+</ul>
+
+<p>So why’d we move from slab allocator , and now linux uses the SLUB allocator?</p>
+
+<p>You see , slab had its own scalability problems. Slab object queues exist per node per CPU. For very large systems, such queues may grow exponentially and hence at some point of processing , may consume the entire system memory which is not what we need.</p>
+
+<p>Hence , the need of a more scalable allocator was the need of the hour.</p>
+
+<h2 id="the-slub-allocator">The SLUB Allocator</h2>
+
+<p>It keeps the same inner principles of the SLAB allocator but drops the requirements of the complex queues and per slab metadata. Information about all the active slabs is kept in the <strong>kmem_cache</strong> structure. Per-slab metadata is kept  in three basic fields</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>void *freelist;
+short unsigned int inuse;
+short unsigned int offset;
+
+</code></pre></div></div>
+
+<ul>
+  <li>
+    <p>Freelist is the pointer to the first free chunk in the slab.</p>
+  </li>
+  <li>
+    <p>inuse is the count of number of objects being used.</p>
+  </li>
+  <li>
+    <p>offset is offset to the next free chunk.</p>
+  </li>
+</ul>
+
+<p>SLUB also introduces the coalescing of slabs which greatly reduces the memory overhead.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The implementation of kmalloc is a very interesting process of linux kernel memory management. The techniques employed to implement kmalloc are quite fascinating and thought provoking.</p>
+
+<p>Here are the references to everything covered in this post :</p>
+
+<ul>
+  <li><a href="https://elixir.bootlin.com/linux/latest/source/mm/slab.c#L3664">Source Code</a></li>
+  <li><a href="https://ruffell.nz/programming/writeups/2019/02/15/looking-at-kmalloc-and-the-slub-memory-allocator.html">An awesome post on kmalloc internals</a></li>
+  <li><a href="https://www.kernel.org/doc/html/latest/vm/numa.html">A little on NUMA</a></li>
+</ul>
+
+:ET

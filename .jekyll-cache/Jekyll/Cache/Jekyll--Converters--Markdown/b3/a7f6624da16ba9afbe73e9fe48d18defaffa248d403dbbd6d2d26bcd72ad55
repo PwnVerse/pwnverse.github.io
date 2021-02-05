@@ -1,0 +1,468 @@
+I"�<p>I had a little introduction to a bit of formal Binary Instrumentation and was very fascinated by how PIN works in Dynamic Binary Instrumentation.</p>
+
+<p>In this post , I would like to discuss a few internals of how PIN works.</p>
+
+<h2 id="tldr-of-what-exactly-is-pin">TL;DR OF WHAT EXACTLY IS PIN</h2>
+
+<p><strong>Dynamic Binary Instrumentation</strong> [DBI] Engines monitor binaries as they execute and instrument the instruction stream, they dont require disassembly or binary rewriting like <strong>Static Binary Instrumentation</strong> [SBI] which makes them <strong>less</strong> error-prone.</p>
+
+<p>Pin is one such famous DBI Engine.</p>
+
+<p>Before heading on , let us know about the architecture of a DBI system.</p>
+
+<h3 id="architecture-of-a-dbi-system">Architecture Of A DBI System</h3>
+
+<p>The DBI engine exposes an <strong>API</strong> that lets programmers write <em>user-defined DBI tools</em> that specify which code should be instrumented and how.</p>
+
+<ul>
+  <li>Before DBI engine starts the main application process, it allows the DBI tool to initialize itself.</li>
+  <li>Next , the function tells DBI engine that it’s done initializing and ready to start the app.</li>
+</ul>
+
+<p class="notice">The DBI engine never runs the application process directly but instead runs code in a <a href="https://www.baeldung.com/jvm-code-cache#:~:text=What%20Is%20the%20Code%20Cache,of%20the%20code%20cache%20area.">code cache</a> that contains all the instrumented code.</p>
+
+<ul>
+  <li>After instrumenting the code , the DBI engine compiles it with a <strong>Just-In Time [JIT]</strong> compiler which re-optimizes the code and stores the compiled code in code cache.</li>
+</ul>
+
+<blockquote>
+  <p>Note that unlike most compilers , the JIT compiler in DBI engine doesn’t translate the code into a different language; it just compiles from native machine code to native machine code.</p>
+</blockquote>
+
+<p>Once compiled code is stored and used from code cache and doesn’t have to be recompiled again.</p>
+
+<ul>
+  <li>
+    <p>DBI engines like <strong>PIN</strong> , <strong>DynamoRIO</strong> , <strong>Dyninst</strong> and <strong>PEBIL</strong> reduce runtime overhead by rewriting control-flow instructions when possible , so they jump directly , to the next block in the code cache without any intervention of the DBI system.</p>
+  </li>
+  <li>
+    <p>When the direct jumps to code cache are not possible , the rewritten instructions return control to the DBI engine so that it can prepare and start the next code chunk.</p>
+  </li>
+</ul>
+
+<p class="notice">While most instructions run natively in the code cache , the DBI engine may emulate some instructions instead of running them directly. <strong>PIN</strong> does this exquisitely for system calls like <strong>execve</strong> that require special handling by DBI engine.</p>
+
+<ul>
+  <li>The instrumented code contains <strong>Callbacks</strong> to functions in the DBI tool that observe or modify the code’s behaviour.</li>
+</ul>
+
+<p>Now that we’re familiar with the workings DBI engine , let’s get our hands dirty with <strong>PIN internals</strong>.</p>
+
+<h2 id="pin-internals">PIN INTERNALS</h2>
+
+<p>Pin fetches and JIT-compiles at <strong>trace granularity</strong> , a basic block-like abstraction that can be entered only at top but may contain multiple exits, unlike regular basic blocks.</p>
+
+<h3 id="trace">TRACE</h3>
+
+<p>Pin defines a trace as a straight-line instruction sequence that ends when it hits an unconditional control transfer or reaches a predefined maximum length or number of conditional control-flow instructions.</p>
+
+<blockquote>
+  <p>Although PIN always JIT-compiles code at trace granularity , it allows you to instrument code at many granularities , including <strong>instruction</strong>, <strong>basic block</strong> , <strong>trace</strong> , <strong>function</strong> and <strong>complete executable[image]</strong>.</p>
+</blockquote>
+
+<p>The DBI tools we implement with PIN are called <strong>Pintools</strong> , which are shared libraries that we write with in C/C++ using Pin API.</p>
+
+<p>The Pintool consists of 2 components.</p>
+
+<ol>
+  <li>
+    <p><strong>Instrumentation Routines</strong></p>
+
+    <ul>
+      <li>Tell which Pin which instrumentation code to add where.</li>
+      <li>These functions run only the first time Pin encounters a particular piece of code that’s not yet instrumented.</li>
+    </ul>
+  </li>
+  <li>
+    <p><strong>Analysis Routines</strong></p>
+
+    <ul>
+      <li>To instrument code , the instrumentation routines install <strong>callbacks</strong> to analysis routines.</li>
+    </ul>
+  </li>
+</ol>
+
+<p class="notice"><strong>CallBacks</strong> contain the actual instrumentation code and are called everytime an instrumented code sequence runs.</p>
+
+<p>Well, now it’s time to play around with Pin. I came across a practical example to learn a bit more on the internals of PIN.
+Let’s see what that is.</p>
+
+<h2 id="profiling-with-pin">PROFILING WITH PIN</h2>
+
+<ul>
+  <li>
+    <p>The profiling tool records statistics about a program’s execution to help optimize that program.</p>
+  </li>
+  <li>
+    <p>It counts the number of executed instructions and the no. of times basic blocks , functions and syscalls are involved.</p>
+  </li>
+  <li>
+    <p>Pintools can implement tool-specific command line options , which are called <strong>knobs</strong> in pin’s slang.</p>
+  </li>
+  <li>
+    <p>There is a dedicated class called <strong>KNOB Class</strong> that we can use to create command line options. We’ll analyse the example implementations in detail.</p>
+  </li>
+</ul>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="c1">//profiler.cpp</span>
+
+<span class="cp">#include "pin.H"
+</span>
+<span class="n">KNOB</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span> <span class="n">ProfileCalls</span><span class="p">(</span><span class="n">KNOB_MODE_WRITEONCE</span><span class="p">,</span><span class="s">"pintool"</span><span class="p">,</span><span class="s">"c"</span><span class="p">,</span><span class="s">"o"</span><span class="p">,</span><span class="s">"Profile function calls"</span><span class="p">);</span>
+<span class="n">KNOB</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span> <span class="n">ProfileSyscalls</span><span class="p">(</span><span class="n">KNOB_MODE_WRITEONCE</span><span class="p">,</span><span class="s">"pintool"</span><span class="p">,</span><span class="s">"s"</span><span class="p">,</span><span class="s">"o"</span><span class="p">,</span><span class="s">"Profile syscalls"</span><span class="p">);</span>
+
+</code></pre></div></div>
+
+<p>Here there are two options of the type **KNOB<bool>** called **ProfileCalls** and **ProfileSyscalls**.</bool></p>
+
+<blockquote>
+  <p>The options use mode <strong>KNOB_MODE_WRITEONCE</strong> because they’re Boolean Flags that are set only <strong>once</strong> when we supply the flag.</p>
+</blockquote>
+
+<ul>
+  <li>We can enable <strong>ProfileCalls</strong> flag by passing <code class="language-plaintext highlighter-rouge">-c</code> flag.</li>
+  <li>We can enable <strong>ProfileSyscalls</strong> flag by passing <code class="language-plaintext highlighter-rouge">-s</code> flag.</li>
+</ul>
+
+<p>Both flags are by default set to <strong>false</strong> , means if we dont pass the command-line flags, they remain disabled throughout the course of the execution of our pintool.</p>
+
+<p>We can also create other types of command line args , like <em>str</em> or <em>int</em>.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//continuation of profiler.cpp</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="o">&gt;</span> <span class="o">&gt;</span> <span class="n">cflows</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="o">&gt;</span> <span class="o">&gt;</span> <span class="n">calls</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="o">&gt;</span> <span class="n">syscalls</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">ADDRINT</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">funcnames</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>Our profiler uses multiple <strong>std::map</strong> data structures and counters to keep track of program’s runtime statistics.</p>
+
+<p>The <strong>cflows</strong> and <strong>calls</strong> data structures map addresses of control flow targets to another map that inturn tracks the address of  the control flow instructions that invoke each target and counts how often that control transfer was taken.</p>
+
+<p>The <strong>syscall</strong> map simply tracks how often a syscall was triggered and the <strong>funcnames</strong> maps function address to symbolic names.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="c1">//continuation of profiler.cpp</span>
+
+<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">insn_count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">cflow_count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">call_count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">syscall_count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>These counters are self-explanatory.</p>
+
+<h3 id="initializing-pin">Initializing PIN</h3>
+
+<p>Like normal programs written in C/C++ , pintools also start with a <code class="language-plaintext highlighter-rouge">main</code> function.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//continuation of profiler.cpp</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span><span class="kt">char</span> <span class="o">*</span><span class="n">argv</span><span class="p">[])</span>
+<span class="p">{</span>
+    <span class="n">PIN_InitSymbols</span><span class="p">();</span> <span class="c1">//Reads the application's symbol tables</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">PIN_Init</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span><span class="n">argv</span><span class="p">))</span> <span class="c1">//Initializes PIN , has all cmd-line options as well as PINtool's options while creating knobs</span>
+    <span class="p">{</span>
+        <span class="n">print_Usage</span><span class="p">();</span>
+        <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>So we have setup PIN , and now the most important part of initializing pintool is <strong>registering the instrumentation routines</strong> that are responsible for instrumenting the application.</p>
+
+<p>The profiler registers three instrumentation routines.</p>
+
+<ol>
+  <li><strong>parse_funcsyms</strong> , instruments at image(executable) granularity.</li>
+  <li><strong>instrument_trace</strong> and <strong>instrument_insn</strong> instrument at <strong>trace</strong> and <strong>instruction</strong> granularity.</li>
+</ol>
+
+<p>To register these with PIN , we call <strong>IMG_AddInstrument Function</strong>, <strong>TRACE_AddInstrument Function</strong> and <strong>INS_AddInstrument Function</strong> .</p>
+
+<p>The 3 instrumentation routines that we’ve seen just now take an <em>IMG</em> ,a <em>TRACE</em> and an <em>INS</em> object as their first parameter, respectively depending on their type. As a second arg , these functions take a <code class="language-plaintext highlighter-rouge">void *</code> which allow us to specify when we register the instrumentation routines using <code class="language-plaintext highlighter-rouge">*_AddInstrument Function</code>.</p>
+
+<h3 id="syscall-entry-function">SYSCALL ENTRY FUNCTION</h3>
+
+<p>Pin also allows us to call functions before or after every syscall , in the same way we register instrumentation callbacks.</p>
+
+<blockquote>
+  <p>Note that we can’t specify callbacks for some syscalls but we can differentiate between syscalls inside the callback function.</p>
+</blockquote>
+
+<p>The Profiler uses <strong>Pin_AddSyscallEntryFunction</strong> to register a function named <strong>log_syscall</strong> that’s called whenever a syscall is entered.</p>
+
+<blockquote>
+  <p>To register a callback that triggers when a syscall exits , we can use <strong>PIN_AddSyscallExitFunction</strong> instead.</p>
+</blockquote>
+
+<p>Note that profile registers the callback only if the value of <strong>ProfileSyscall</strong> is true.</p>
+
+<h3 id="fini-function">FINI FUNCTION</h3>
+
+<p>The final callback that the profile registers is a <em>fini function</em> , which is called when the app exits or when the PIN is detached from it.</p>
+
+<p class="notice">This function is responsible for printing profiling results.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//continuation of profiler.cpp</span>
+
+    <span class="n">IMG_AddInstrumentFunction</span><span class="p">(</span><span class="n">parse_funcsyms</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span> <span class="c1">//second arg is passed as NULL here</span>
+    <span class="n">TRACE_AddInstrumentFunction</span><span class="p">(</span><span class="n">instrument_trace</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+    <span class="n">INS_AddInstrumentFunction</span><span class="p">(</span><span class="n">instrument_insn</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="n">ProfileSyscalls</span><span class="p">.</span><span class="n">value</span><span class="p">())</span>
+    <span class="p">{</span>
+        <span class="n">PIN_AddSyscallEntryFunction</span><span class="p">(</span><span class="n">log_syscall</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span> <span class="c1">//logging syscalls</span>
+    <span class="p">}</span>
+    <span class="n">PIN_AddFiniFunction</span><span class="p">(</span><span class="n">print_results</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="n">PIN_StartProgram</span><span class="p">();</span> <span class="c1">//Never returns and hence return 0 is never reached</span>
+
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>Let’s look at a few details of Parsing Function Symbols.</p>
+
+<h2 id="parsing-function-symbols">PARSING FUNCTION SYMBOLS</h2>
+
+<p>We recall that <strong>parse_funcsyms</strong> is an <strong>image-granularity</strong> instrumentation routine. Such routines are called when a new image(binary/library) is loaded, allowing us to instrument the image as a whole.</p>
+
+<p>This also lets us loop over all the functions in the image and add analysis routines before or after a function.</p>
+
+<blockquote>
+  <p>Note that function instrumentation is reliabel only if the binary contains <strong>symbolic info</strong>.
+Also note that <strong>after-function</strong> instrumentation doesn’t work with some optimizations , such as <strong>tail calls</strong>.</p>
+</blockquote>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//continuation of profiler.cpp</span>
+
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">parse_funcsyms</span><span class="p">(</span><span class="n">IMG</span> <span class="n">img</span><span class="p">,</span><span class="kt">void</span> <span class="o">*</span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">IMG_valid</span><span class="p">(</span><span class="n">img</span><span class="p">))</span> <span class="c1">//checks for a valid image</span>
+        <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>If the image is valid , <strong>parse_funcsyms</strong> loops over all <strong>SEC</strong> objects in the image , which represent all sections.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="k">for</span><span class="p">(</span><span class="n">SEC</span> <span class="n">sec</span> <span class="o">=</span> <span class="n">IMG_SecHead</span><span class="p">(</span><span class="n">img</span><span class="p">);</span> <span class="n">SEC_Valid</span><span class="p">(</span><span class="n">sec</span><span class="p">);</span> <span class="n">sec</span> <span class="o">=</span> <span class="n">SEC_Next</span><span class="p">(</span><span class="n">sec</span><span class="p">))</span>
+    <span class="p">{</span>
+        <span class="k">for</span><span class="p">(</span><span class="n">RTN</span> <span class="n">rtn</span> <span class="o">=</span> <span class="n">SEC_RtnHead</span><span class="p">(</span><span class="n">sec</span><span class="p">)</span> <span class="p">;</span> <span class="n">RTN_Valid</span><span class="p">(</span><span class="n">rtn</span><span class="p">);</span> <span class="n">rtn</span> <span class="o">=</span> <span class="n">RTN_Next</span><span class="p">(</span><span class="n">rtn</span><span class="p">))</span>
+        <span class="p">{</span>
+            <span class="n">funcnames</span><span class="p">[</span><span class="n">RTN_Address</span><span class="p">(</span><span class="n">rtn</span><span class="p">)]</span> <span class="o">=</span> <span class="n">RTN_Name</span><span class="p">(</span><span class="n">rtn</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>For each section , <em>parse_funcsyms</em> iterates over all the functions (represented by <strong>RTN</strong> objects , meaning <strong>Routine</strong> ) and maps each function’s address in the <em>funcnames</em> map to the symbolic name of the function , if the function name is unknown then it returns an empty string.</p>
+
+<p><strong>REMARK</strong> -&gt; This kind of function based instrumentation is rendered useless in stripped binaries which are devoid of any symbols.</p>
+
+<h2 id="implementing-basic-block-instrumentation">IMPLEMENTING BASIC BLOCK INSTRUMENTATION</h2>
+
+<p>Unfortunately , we can’t implement basic blocks in PIN API directly , ie , there’s no <strong>BBL_AddInstrumentFunction</strong>.</p>
+
+<p>To instrument basic blocks , you have to add a <strong>Trace level</strong> instrumentation routine and then loop over all basic blocks in trace , instrumenting each one.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span> <span class="nf">instrument_trace</span><span class="p">(</span><span class="n">TRACE</span> <span class="n">trace</span> <span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">IMG</span> <span class="n">img</span> <span class="o">=</span> <span class="n">IMG_FindByAddress</span><span class="p">(</span><span class="n">TRACE_Address</span><span class="p">(</span><span class="n">trace</span><span class="p">));</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">IMG_Valid</span><span class="p">(</span><span class="n">img</span><span class="p">)</span> <span class="o">||</span> <span class="o">!</span><span class="n">IMG_IsMainExecutable</span><span class="p">(</span><span class="n">img</span><span class="p">))</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="n">BBL</span> <span class="n">bb</span> <span class="o">=</span> <span class="n">TRACE_BblHead</span><span class="p">(</span><span class="n">trace</span><span class="p">)</span> <span class="p">;</span> <span class="n">BBL_valid</span><span class="p">(</span><span class="n">bb</span><span class="p">)</span> <span class="p">;</span> <span class="n">bb</span> <span class="o">=</span> <span class="n">BBL_Next</span><span class="p">(</span><span class="n">bb</span><span class="p">))</span>
+    <span class="p">{</span>
+        <span class="n">instrument_bb</span><span class="p">(</span><span class="n">bb</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<ol>
+  <li>First , the <strong>instrument_trace</strong> calls <strong>IMG_FindByAddress</strong> to find the IMG that the trace is part of.</li>
+  <li>If the trace is valid and part of main application , <strong>instrument_trace</strong> loops over all Basic Blocks , <strong>BBL</strong> objects in the trace.</li>
+  <li>For each <strong>BBL</strong> it calls <strong>instrument_bb</strong> which performs the instrumentation of each basic block.</li>
+  <li>To instrument a given BBL , <strong>instrument_bb</strong> calls <strong>BBL_InsertCall</strong> which is PIN’s API function to instrument a basic block with an <strong>analysis routine callback</strong>.</li>
+</ol>
+
+<p><strong>BBL_InsertCall</strong> takes 3 args , one <strong>bb</strong> , two an <strong>insertion point</strong> and third a <strong>function pointer</strong> to the analysis routine we wish to add.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span> <span class="nf">instrument_bb</span><span class="p">(</span><span class="n">BBL</span> <span class="n">bb</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">BBL_InsertCall</span><span class="p">(</span><span class="n">bb</span><span class="p">,</span><span class="n">IPOINT_ANYWHERE</span><span class="p">,(</span><span class="n">AFUNPTR</span><span class="p">)</span><span class="n">count_bb_insns</span><span class="p">,</span><span class="n">IARG_UINT32</span><span class="p">,</span><span class="n">BBL_NumIns</span><span class="p">(</span><span class="n">bb</span><span class="p">),</span><span class="n">IARG_END</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>In this case , the insertion point is <strong>IPOINT_ANYWHERE</strong> because it doesn’t matter at what point in the basic block the instruction counter is updated.</p>
+
+<p>Here’s a table which has information of a few insertion points.</p>
+
+<table rules="groups">
+  <thead>
+    <tr>
+      <th style="text-align: left">**Insertion Point**</th>
+      <th style="text-align: center">**Analysis CallBack**</th>
+      <th style="text-align: right">**Validity**</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left">IPOINT_BEFORE</td>
+      <td style="text-align: center">Before Instrumented object</td>
+      <td style="text-align: right">Always valid</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">IPOINT_AFTER</td>
+      <td style="text-align: center">On fallthrough edge of a branch or a regular instruction</td>
+      <td style="text-align: right">If INS_HasFallThrough is true</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">IPOINT_ANYWHERE</td>
+      <td style="text-align: center">Anywhere in instrumented object</td>
+      <td style="text-align: right">For Trace or BBL</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">IPOINT_TAKEN_BRANCH</td>
+      <td style="text-align: center">On taken edge of a branch</td>
+      <td style="text-align: right">If INS_isBranchOrCall is true</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>In our implementation , there’s an option argument of type <strong>IAARG_UINT32</strong> with value <strong>BBL_NumIns</strong> and <strong>IARG_END</strong> is to specofy the end of args.</p>
+
+<h2 id="instrumenting-control-flow-instructions">INSTRUMENTING CONTROL FLOW INSTRUCTIONS</h2>
+
+<p>The profiler can count the <em>number of control flow transfers</em> and optionally , the number of calls.</p>
+
+<p>Our <strong>instrument_insn</strong> takes <strong>INS</strong> ins and a void* as args.</p>
+
+<ol>
+  <li>Initially , it checks whether our <strong>INS</strong> object is a control-flow instruction or not.</li>
+</ol>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span> <span class="nf">instrument_insn</span><span class="p">(</span><span class="n">INS</span> <span class="n">ins</span> <span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">INS_isBranchOrCall</span><span class="p">(</span><span class="n">ins</span><span class="p">))</span>
+        <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<ol>
+  <li>After that , it checks whether the instruction is a part of the main application or not.</li>
+</ol>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">IMG</span> <span class="n">img</span> <span class="o">=</span> <span class="n">IMG_FindByAddress</span><span class="p">(</span><span class="n">INS_Address</span><span class="p">(</span><span class="n">ins</span><span class="p">));</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">IMG_Valid</span><span class="p">(</span><span class="n">img</span><span class="p">)</span> <span class="o">||</span> <span class="o">!</span><span class="n">IMG_isMainExecutable</span><span class="p">(</span><span class="n">img</span><span class="p">))</span>
+        <span class="k">return</span><span class="p">;</span>
+
+    <span class="n">INS_InsertPredicatedCall</span><span class="p">(</span><span class="n">ins</span><span class="p">,</span><span class="n">IPOINT_TAKEN_BRANCH</span><span class="p">,(</span><span class="n">AFUNPTR</span><span class="p">)</span><span class="n">count_cflow</span><span class="p">,</span><span class="n">IARG_INST_PTR</span><span class="p">,</span><span class="n">IARG_BRANCH_TARGET_ADDR</span><span class="p">,</span><span class="n">IARG_END</span><span class="p">);</span>
+
+</code></pre></div></div>
+
+<h2 id="instrumenting-the-taken-edge">INSTRUMENTING THE TAKEN EDGE</h2>
+
+<p>To record control transfers and calls , <strong>instrument_insn</strong> inserts three different analysis callbacks.</p>
+
+<ol>
+  <li>First, it uses <strong>INS_InsertPredicatedCall</strong> to insert a callback on the instruction’s taken edge.</li>
+  <li>The inserted analysis callback to <em>count_cflow</em> increments the control-flow counter in case the branch is taken and records the source and target addresses of control flow.</li>
+</ol>
+
+<p class="notice">Note that <strong>instrument_insn</strong> uses <strong>INS_InsertPredicatedCall</strong> to insert a callback instead of <strong>INS_InsertCall</strong>.Analysis callbacks inserted with <strong>INS_PredicatedCall</strong> only if the condition holds and the instruction is executed.</p>
+
+<blockquote>
+  <p>In contrast to the above fact , callbacks inserted with <strong>INS_InsertCall</strong> are called even if the repeat condition doesn’t hold , leading to an <em>overestimation</em> of instruction count.</p>
+</blockquote>
+
+<h2 id="instrumenting-the-fall-through-edge">INSTRUMENTING THE FALL THROUGH EDGE</h2>
+
+<p>The profiler should record control transfer regardless of the <strong>branch direction</strong>.</p>
+
+<blockquote>
+  <p>Note that some instructions such as <strong>unconditional jumps</strong> have <strong>no</strong> fallthrough edges meaning that we have to explicitly check <strong>INS_HasFallthrough</strong> before we try to instrument an instruction’s fallthrough edge.</p>
+</blockquote>
+
+<blockquote>
+  <p>Also Note that According to Pin’s definition , <strong>non-control flow instructions</strong> that just continue to the next instruction <strong>do have a fallthrough edge</strong>.</p>
+</blockquote>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="c1">// Previously we just declared INS_PredicatedCall , now let's define it</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="n">INS_HasFallThrough</span><span class="p">(</span><span class="n">ins</span><span class="p">))</span>
+    <span class="p">{</span>
+        <span class="n">INS_PredicatedCall</span><span class="p">(</span><span class="n">IPOINT_AFTER</span><span class="p">,(</span><span class="n">AFUNPTR</span><span class="p">)</span><span class="n">count_cflow</span><span class="p">,</span><span class="n">IARG_INST_PTR</span><span class="p">,</span><span class="n">IARG_FALLTHROUGH_ADDR</span><span class="p">,</span><span class="n">IARG_END</span><span class="p">);</span>
+    <span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>As we can see from the above code , if the given instruction turns out to have a Fallthrough Edge , <strong>instrument_insn</strong> inserts an analysis callback to <strong>count_cflow</strong> on that edge as it did for taken edge also. The only difference is that this new callback uses insertion point <strong>IPOINT_AFTER</strong> and passes <strong>fallthrough’s address</strong> as the target address to record</p>
+
+<h2 id="instrumenting-calls">INSTRUMENTING CALLS</h2>
+
+<p>The profiler keeps a separate counter and mapping to track called functions so that we can see which functions are more better for our application.</p>
+
+<p class="notice">Recall that we have to pass <strong>-c</strong> flag to enable tracking called functions.</p>
+
+<p>To instrument calls , our <strong>instrument_insn</strong> uses <strong>INS_IsCall</strong> to separate calls from other instructions.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">if</span><span class="p">(</span><span class="n">INS_IsCall</span><span class="p">(</span><span class="n">ins</span><span class="p">))</span>
+<span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">ProfileCalls</span><span class="p">.</span><span class="n">Value</span><span class="p">())</span>
+    <span class="p">{</span>
+        <span class="n">INS_InsertCall</span><span class="p">(</span><span class="n">ins</span><span class="p">,</span><span class="n">IPOINT_BEFORE</span><span class="p">,(</span><span class="n">AFUNPTR</span><span class="p">)</span><span class="n">count_call</span><span class="p">,</span><span class="n">IARG_INST_PTR</span><span class="p">,</span><span class="n">IARG</span><span class="p">,</span><span class="n">BRANCH_TARGET_ADDR</span><span class="p">,</span><span class="n">IARG_END</span><span class="p">);</span>
+
+    <span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>If the instruction is a call , then the profiler inserts an analysis callback before the call instruction at <strong>IPOINT_BEFORE</strong> to an analysis routine called <strong>count_call</strong> passing in the call’s source , ie the Instruction Pointer and target address.</p>
+
+<p>Here it’s safe to use <strong>INS_InsertCall</strong> instead of <strong>INS_InsertPredicatedCall</strong> because there are no call instructions with built-in conditionals.</p>
+
+<p>Now let’s see a few analysis routines that we’ve used so far.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">count_bb_insn</span><span class="p">(</span><span class="n">UNINT32</span> <span class="n">n</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">insn_count</span> <span class="o">+=</span> <span class="n">n</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">count_cflow</span><span class="p">(</span><span class="n">ADDRINT</span> <span class="n">ip</span><span class="p">,</span> <span class="n">ADDRINT</span> <span class="n">target</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">cflows</span><span class="p">[</span><span class="n">target</span><span class="p">][</span><span class="n">ip</span><span class="p">]</span><span class="o">++</span><span class="p">;</span>
+    <span class="n">cflow_count</span><span class="o">++</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">count_call</span><span class="p">(</span><span class="n">ADDRINT</span> <span class="n">ip</span><span class="p">,</span> <span class="n">ADDRINT</span> <span class="n">target</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">calls</span><span class="p">[</span><span class="n">target</span><span class="p">][</span><span class="n">ip</span><span class="p">]</span><span class="o">++</span><span class="p">;</span>
+    <span class="n">call_count</span><span class="o">++</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">log_syscall</span><span class="p">(</span><span class="n">THREADID</span> <span class="n">tid</span> <span class="p">,</span> <span class="n">CONTEXT</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SYSCALL_STANDARD</span> <span class="n">std</span> <span class="p">,</span> <span class="n">VOID</span> <span class="o">*</span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">syscalls</span><span class="p">[</span><span class="n">PIN_GetSyscallNumber</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span><span class="n">std</span><span class="p">)]</span><span class="o">++</span><span class="p">;</span>
+    <span class="n">syscall_count</span><span class="o">++</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The function <strong>log_syscall</strong> is not a regular analysis routine but a callback for syscall entry events.</p>
+
+<p>In PIN , syscall handlers take 4 args , a <strong>THREADID</strong> identifying the thread that made the syscall ; a <code class="language-plaintext highlighter-rouge">CONTEXT *</code> containing things like syscall number , arguments , and return value (only for syscall exit handlers) ; a <strong>SYSCALL_STANDARD</strong> argument that verifies the syscall’s calling convention and finally the <code class="language-plaintext highlighter-rouge">void*</code> which allows us to pass user-defined data structure.</p>
+
+<p>Recall that purpose of  <strong>log_syscall</strong> is to record how often each syscall is called.</p>
+
+<p>It calls <strong>Get_SyscallNumber</strong> to get the current syscall’s number and records a hit for that syscall in <em>syscalls</em> map.</p>
+
+:ET

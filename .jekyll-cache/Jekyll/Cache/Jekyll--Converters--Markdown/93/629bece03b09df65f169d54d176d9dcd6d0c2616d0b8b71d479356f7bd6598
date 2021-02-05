@@ -1,0 +1,158 @@
+I",<h1 id="tldr">tl;dr</h1>
+
+<ul>
+  <li>overflow the <code class="language-plaintext highlighter-rouge">char</code> candle counter stored in the wax structure and trigger uaf.</li>
+  <li>Use the uaf to trigger double free and get shell.</li>
+</ul>
+
+<p><strong>Challenge Points:</strong> 385
+<strong>Solves:</strong> 2</p>
+
+<p>We had a great time this weekend playing this year’s edition of HackTheVote. Since the CTF was conducted by RPISEC , nothing easy could be expected. I spent most of my time during the CTF on the challenge leakguard but we couldn’t solve it during the CTF. But when I took sometime off and tried it , I finally solved it :).</p>
+
+<h2 id="challenge-description">Challenge description</h2>
+
+<p>We’d been given the challenge binary , the <strong>libc 2.27</strong> and a mysterious library which is being preloaded to run with the binary , the <strong>leakguard.so</strong>.</p>
+
+<h2 id="initial-analysis">Initial analysis</h2>
+
+<p>Let’s have a quick look at <code class="language-plaintext highlighter-rouge">checksec</code>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CANARY    : disabled
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+</code></pre></div></div>
+
+<h2 id="reversing-the-shared-object">Reversing the shared object</h2>
+
+<p>An interesting share object is shipped along with the binary executable. Here’s what it does:</p>
+
+<ul>
+  <li>Wrapper around <code class="language-plaintext highlighter-rouge">__GI_libc_write</code> internally called in every call to <code class="language-plaintext highlighter-rouge">puts</code>.</li>
+  <li>Reads data from <code class="language-plaintext highlighter-rouge">/proc/self/maps</code> which contains the virtual memory maps of the binary. (Pretty much <code class="language-plaintext highlighter-rouge">vmmap</code> of <code class="language-plaintext highlighter-rouge">gdb</code>)</li>
+  <li>Parse through the string which contains the data to be printed and check if anywhere , a valid memory address is present, if so , null the address number of bytes. It stops at null.</li>
+</ul>
+
+<h2 id="reversing-the-binary">Reversing the binary</h2>
+
+<p>The <code class="language-plaintext highlighter-rouge">candles</code> binary has standard heap functions which are as follows :</p>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">Add_wax</code></li>
+</ol>
+
+<ul>
+  <li>Check for an empty element in the bss <code class="language-plaintext highlighter-rouge">wax</code> table.</li>
+  <li>Subsequently,  take input for choice of <code class="language-plaintext highlighter-rouge">oil</code> and <code class="language-plaintext highlighter-rouge">dye</code>.</li>
+  <li>Malloc a chunk of size <code class="language-plaintext highlighter-rouge">0x18</code> , then create a structure as follows -</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="n">wax</span><span class="p">{</span>
+<span class="n">candle_count</span><span class="p">;</span>
+<span class="kt">long</span><span class="o">*</span> <span class="n">ptr_to_oil_name</span><span class="p">;</span>
+<span class="kt">long</span><span class="o">*</span> <span class="n">ptr_to_dye_name</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div></div>
+
+<p>Initially , while adding a wax , the <code class="language-plaintext highlighter-rouge">candle_count</code> is set to <strong>1</strong>.</p>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">Remove_wax</code></li>
+</ol>
+
+<ul>
+  <li>Reduce the candle reference counter , check if it is 0 , and if so , free the wax structure ,else return without freeing the wax structure.</li>
+  <li>Null out the wax pointer in the <code class="language-plaintext highlighter-rouge">wax</code> bss table.</li>
+</ul>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">Add candle</code></li>
+</ol>
+
+<ul>
+  <li>Take input of the index of wax to be associated with the candle.</li>
+  <li>Malloc a candle structure of size <code class="language-plaintext highlighter-rouge">0x18</code>.</li>
+  <li>Read <code class="language-plaintext highlighter-rouge">0x10</code> into the candle structure.</li>
+  <li>Increment the candle reference counter in the respective <code class="language-plaintext highlighter-rouge">wax</code> structure.</li>
+</ul>
+
+<p>The structure of candle structure is as follows :</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="n">candle</span> <span class="p">{</span>
+
+<span class="kt">char</span> <span class="n">name</span><span class="p">[</span><span class="mh">0x10</span><span class="p">];</span>
+<span class="kt">unsigned</span> <span class="kt">char</span><span class="o">*</span> <span class="n">reference_counter_ptr</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div></div>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">View candle</code></li>
+</ol>
+
+<ul>
+  <li>Print data of all candles but there’s an additional check here. The <code class="language-plaintext highlighter-rouge">leakguard.so</code> comes into picture in the every call to <code class="language-plaintext highlighter-rouge">puts</code>. Since <code class="language-plaintext highlighter-rouge">puts</code> internally calls <code class="language-plaintext highlighter-rouge">__GI_libc_write</code> and <code class="language-plaintext highlighter-rouge">leakguard</code> is basically a wrapper around <code class="language-plaintext highlighter-rouge">__GI_libc_write</code> function.</li>
+  <li>If data contains a memory address , it gets nulled out :(.</li>
+</ul>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">Remove_candle</code></li>
+</ol>
+
+<ul>
+  <li>Check if candle reference pointer is null or not , if null , reduce the candle count in the linked structure.</li>
+  <li>Check if the candle count linked to the wax structure is 0 or not , if 0 , free the wax structure <strong>without nulling out</strong> the wax pointer on the wax <code class="language-plaintext highlighter-rouge">bss</code> table.</li>
+  <li>Finally, free the <code class="language-plaintext highlighter-rouge">candle</code> and null out the candle pointer.</li>
+</ul>
+
+<p>Enough of reversing , let’s get to some pwn business.</p>
+
+<h2 id="vulnerability">Vulnerability</h2>
+
+<p>During the CTF , we were able to find out the bug but there’s a cool way by which it has to be triggered. The bug is that , if we give <code class="language-plaintext highlighter-rouge">0x10</code> bytes for the candle name,  and try to print name , <code class="language-plaintext highlighter-rouge">puts</code> nulls out the <code class="language-plaintext highlighter-rouge">candle reference count</code> pointer. So you might ask , what is so useful about it? Well , remember in the <code class="language-plaintext highlighter-rouge">Remove candle</code> function , if this reference pointer is found to be nulled, we skip the whole part of decrementing the count altogether. We only free the candle pointer and null out it’s subsequent bss entry.</p>
+
+<h2 id="triggering-the-char-overflow">Triggering the char overflow</h2>
+
+<p>Another important thing to note is that candle count is a <code class="language-plaintext highlighter-rouge">char</code> meaning it is bound to overflow. Now that we can prevent the decrement of candle count , we can very well trigger the overflow , all thanks to the leakguard :).</p>
+
+<p>Once we trigger the overflow,  the candle counter resets and finally we can free the <code class="language-plaintext highlighter-rouge">wax</code> pointer without nulling out it’s subsequent memory. Hence we triggered a use after free.</p>
+
+<p>But wait , we’re missing out on something very important , the <strong>leaks</strong>.</p>
+
+<h2 id="leaks">Leaks</h2>
+
+<p>Even if leakguard does a good job by nulling a valid memory address , it cannot prevent partial memory leaks. Yes , you heard it right.</p>
+
+<p>We can leak by overwriting the last 2 bytes of a heap address to make it an invalid memory address thus safely bypassing leakguard.
+To get proper leaks , we might have to resort to methods like binary search to fix the invalid addresses that we leak or in worst cases , bruteforce. So, what about libc??</p>
+
+<p>Leak code segment address , then when we add a candle , the <strong>free wax structure</strong> is taken for allocation. Hence , we can change the contents of the structure. Recollect that the structure has pointers to the names of oil and dye. If we overwrite any of the pointer to the GOT address of <code class="language-plaintext highlighter-rouge">stdout</code> (which is there in bss) , we can leak libc in the subsequent printing of candle names.</p>
+
+<h2 id="getting-that-shell">Getting that shell</h2>
+
+<p>Now that you have a Use After Free , a libc leak and what’s more, the provided libc is 2.27 hence no double free checks (phew!),
+Isn’t that enough to pwn this binary now?</p>
+
+<p>Once we get libc leak , we take the following steps to get shell :</p>
+
+<ul>
+  <li>Overwrite the reference counter in the wax structure with <code class="language-plaintext highlighter-rouge">0x100</code> such that last byte is null.</li>
+  <li>Delete wax structure to free it.</li>
+  <li>Delete an intermediate candle.</li>
+  <li>Now delete a candle linked to the wax structure which was freed , since reference counter was 1 , it will become 0 and free the struct again.</li>
+  <li>Now add candle to get our free wax structure back.</li>
+  <li>Overwrite <code class="language-plaintext highlighter-rouge">fd</code> with <code class="language-plaintext highlighter-rouge">__free_hook</code>.</li>
+  <li>After another allocation , we get allocation at <code class="language-plaintext highlighter-rouge">__free_hook</code> itself,  overwrite that with <code class="language-plaintext highlighter-rouge">system</code>.</li>
+</ul>
+
+<p>Wait,  doing that will null the address of <code class="language-plaintext highlighter-rouge">system</code> since <code class="language-plaintext highlighter-rouge">__free_hook</code> is now a candle. Thinking a little , we can get allocation at <code class="language-plaintext highlighter-rouge">__free_hook - 1</code> , overwrite first byte with <code class="language-plaintext highlighter-rouge">\x00</code> so that we bypass the leakguard and hence overwrite <code class="language-plaintext highlighter-rouge">__free_hook</code> with system.</p>
+
+<p>Add a candle with data as <code class="language-plaintext highlighter-rouge">/bin/sh&lt;!JEKYLL@3180@50&gt;</code> and free that candle to get shell.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The idea of triggering a uaf with a char overflow is really novel. I had a great time solving the challenge. All in all ,awesome challenge , awesome idea , kudos to the author <strong>pernicious</strong> for such a good challenge and kudos to <strong>RPISEC</strong> for such a wonderful CTF.</p>
+
+<p>Here’s the exploit script - <a href="https://gist.github.com/PwnVerse/b455bc609f5f95e7808b4c0789f8ff13">Exploit</a></p>
+:ET

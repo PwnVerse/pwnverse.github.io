@@ -1,0 +1,2 @@
+I"G<p>Linux provides a bunch of syscalls among which only a few are known and used often.Most of the syscalls we use are always wrapped around cheesy glibc wrappers (functions). But there are a few syscalls which have no such glibc wrappers and one of the most interesting of them is the <strong>Userfaultfd</strong> syscall.</p>
+:ET

