@@ -42,6 +42,8 @@ favicon: "" # the favicon for your site
 yat:
   date_format: "%b %d, %Y"
 
+theme: jekyll-theme-yat
+
 # If you want more debug log, you can set true
 # debug: false
 
