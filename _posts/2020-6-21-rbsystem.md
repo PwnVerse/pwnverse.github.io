@@ -2,7 +2,7 @@
 layout: "post"
 title: "Cyber Mimic 2020 Rbsystem Writeup"
 date: 2020-6-21
-exerpt: ""
+tags: [Heap, File Structures,CTF]
 ---
 
 This weekend , we have a great time playing Cyber Mimic CTF and this post is supposedly the intended solution for the challenge **Rbsystem** that we solved during the CTF.

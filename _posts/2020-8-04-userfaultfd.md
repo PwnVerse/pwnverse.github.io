@@ -3,6 +3,7 @@ layout: "post"
 title: "Understanding the Userfaultfd Syscall"
 date: 2020-8-04
 exerpt: ""
+tags: [Linux, OS]
 ---
 
 Linux provides a bunch of syscalls among which only a few are known and used often.Most of the syscalls we use are always wrapped around cheesy glibc wrappers (functions). But there are a few syscalls which have no such glibc wrappers and one of the most interesting of them is the **Userfaultfd** syscall.

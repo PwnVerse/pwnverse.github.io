@@ -2,6 +2,7 @@
 layout: "post"
 title: "Allocators of the Linux Kernel"
 date: 2021-01-22
+tags: [Linux Kernel , Allocators]
 ---
 
 ## tl;dr
@@ -24,8 +25,11 @@ Without an object based allocator , the kernel will spend more time in allocatio
 
 The slab allocator consists of a variable number of caches that are linked together on a circular doubly linked list called **cache chain**. Each cache maintains blocks of contiguous pages in memory called **slabs**.
 
-![Slab](https://drive.google.com/file/d/16qP8Uf6r1J-lZ3hnwsVYQ94VQEnSFHPU/view?usp=sharing)
-{: .image-pull-right}
+<figure>
+	<a href="./imgs/Slab.png"><img src="./imgs/Slab.png"></a>
+	<figcaption>An overview of slab.</figcaption>
+</figure>
+
 
 ## Principles of Slab allocator
 

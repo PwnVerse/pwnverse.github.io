@@ -2,7 +2,7 @@
 layout: "post"
 title: "Kernel Module Programming - 1"
 date: 2020-6-27
-excerpt: ""
+tags: [Linux Kernel, Basics]
 ---
 
 # Intro to a kernel module

@@ -3,6 +3,7 @@ layout: "post"
 title: "SpamAndHex 2020 Hashing@Home Writeup"
 date: 2020-5-12
 exerpt: "Heap Overflow ,Arbitrary Read and Partial Abritrary Write on Heap"
+tags: [Heap, Overflow]
 ---
 
 

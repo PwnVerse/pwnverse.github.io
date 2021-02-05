@@ -3,6 +3,7 @@ layout: post
 title: "Writeup for WriteOnly Google CTF - 2020"
 date: 2020-08-24
 excerpt: "Sandbox with shellcode exec"
+tags: [Sandbox,Shellcode,CTF]
 ---
 
 We had a really great time this weekend playing this year's edition of Google CTF. Although we were able to solve only 2 of the pwn challenges , here's the intended writeup for the challenge *WriteOnly*.

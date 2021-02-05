@@ -3,6 +3,7 @@ layout: "post"
 title: "House Of Lore"
 date: 2020-5-15
 exerpt: "tcache-stashing unlink attack"
+tags: [Heap, House of Lore, CTF]
 ---
 
 This attack was introduced for glibc > 2.25 since the addition of tcache bins into glibc malloc.

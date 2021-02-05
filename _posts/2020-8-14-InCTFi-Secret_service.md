@@ -2,7 +2,7 @@
 layout: "post"
 title: "InCTFi 2020 Secret Service Writeup"
 date: 2020-8-14
-exerpt: ""
+tags: [Heap, Format Strings, InCTFi]
 ---
 
 

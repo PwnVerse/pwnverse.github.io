@@ -2,7 +2,7 @@
 layout: "post"
 title: "HSCTF 2020 Studysim Writeup"
 date: 2020-6-04
-exerpt: ""
+tags: [Heap, tcache, CTF]
 ---
 
 This is one the challenges I spent a lot of time on during this year's edition of HSCTF.

@@ -2,7 +2,7 @@
 layout: "post"
 title: "Writeup for Simple Echo Server 0ctf 2020"
 date: 2020-7-02
-exerpt: ""
+tags: [Format Strings, CTF]
 ---
 
 We had great time playing this year's edition of 0CTF 2020. I was mostly working on the challenge **simple\_echoserver** which was a fairly simple stack based challenge, but required lot of brute forcing. Sadly , we couldn't hit the bruteforce on server. Nevertheless , here's the intended solution for the challenge.
