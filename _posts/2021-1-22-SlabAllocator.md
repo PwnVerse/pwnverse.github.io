@@ -25,7 +25,9 @@ Without an object based allocator , the kernel will spend more time in allocatio
 
 The slab allocator consists of a variable number of caches that are linked together on a circular doubly linked list called **cache chain**. Each cache maintains blocks of contiguous pages in memory called **slabs**.
 
-![Slab](slab.png)
+<img src="./slab.png" alt="Overview of Slab" style="height: 100px; width:100px;"/>
+
+
 
 ## Principles of Slab allocator
 
