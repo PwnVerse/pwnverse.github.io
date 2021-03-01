@@ -1,7 +1,7 @@
 ---
 layout: "post"
 title: "Mitigations of the Linux Kernel"
-date: 2020-2-26
+date: 2021-2-26
 tags: [Linux Kernel,Mitigations]
 ---
 
